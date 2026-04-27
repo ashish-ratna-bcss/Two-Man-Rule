@@ -1,5 +1,4 @@
 # config.py
-import math
 
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
