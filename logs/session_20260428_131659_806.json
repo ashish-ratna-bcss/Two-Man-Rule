@@ -1,0 +1,114 @@
+[
+  {
+    "timestamp": "2026-04-28T13:16:21.132164",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:34.932090",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:35.250653",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:35.414724",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:35.577975",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:35.742256",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:35.907269",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:36.073062",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:36.242504",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:36.842190",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:37.390316",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:44.353343",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:44.526540",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:51.774467",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:51.931698",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:16:52.099898",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  }
+]

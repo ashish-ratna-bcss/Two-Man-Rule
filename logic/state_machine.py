@@ -121,42 +121,29 @@ class DualAuthStateMachine:
             if pose["qualified"]:
                 interacting_ids.add(track_id)
 
-        # Strictly persist assigned/candidate persons - keep them qualified if still tracked
+        # Once assigned, keep person alive - add to interacting_ids if available, else use grace buffer
         for slot in ("a", "b"):
-            # Assigned IDs are STICKY - keep them as long as track ID exists
             assigned_id = self.session.get(f"id_{slot}")
-            if assigned_id is not None:
-                if assigned_id in tracked_persons:
-                    interacting_ids.add(assigned_id)
-                    print(f"[STRICT] P{1 if slot == 'a' else 2} assigned ID {assigned_id} stays (sticky)")
-                    continue
-                else:
-                    # Try closest person by anchor only if assigned person completely gone
-                    anchor = self.verified_anchors[slot]
-                    if anchor is not None:
-                        best_id = None
-                        best_distance = float("inf")
-                        for track_id in tracked_persons.keys():
-                            candidate_anchor = pose_results.get(track_id, {}).get("anchor")
-                            if candidate_anchor is None:
-                                continue
-                            distance = self._anchor_distance(anchor, candidate_anchor)
-                            if distance < best_distance:
-                                best_id = track_id
-                                best_distance = distance
-
-                        if best_id is not None and best_distance <= 250:
-                            interacting_ids.add(best_id)
-                            self.session[f"id_{slot}"] = best_id
-                            print(f"[STRICT] P{1 if slot == 'a' else 2} reassigned {assigned_id} → {best_id} (dist={best_distance:.0f}px)")
-                            continue
-
-            # Candidates with timer accumulation stay qualified if tracked
             candidate_id = self.session.get(f"candidate_{slot}")
             timer = self.session.get(f"timer_{slot}_frames", 0)
+
+            # Assigned person: add if available, else stay in system via grace buffer logic
+            if assigned_id is not None:
+                if assigned_id in pose_results:
+                    interacting_ids.add(assigned_id)
+                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} qualified (in pose_results)")
+                else:
+                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} lost from pose_results, grace buffer will maintain")
+                    # Mark as having lock contact so _update_unlock_slot doesn't disqualify immediately
+                    if assigned_id not in pose_results:
+                        pose_results[assigned_id] = {"qualified": True, "has_lock_contact": True, "anchor": self.verified_anchors[slot]}
+                        interacting_ids.add(assigned_id)
+                continue
+
+            # Candidate: stay qualified if timer started and still tracked
             if candidate_id is not None and timer > 0 and candidate_id in tracked_persons:
                 interacting_ids.add(candidate_id)
-                print(f"[STRICT] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f) stays")
+                print(f"[CANDI] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f)")
 
         self._refresh_verified_slots(pose_results)
         self.active_ids_in_zone = interacting_ids
