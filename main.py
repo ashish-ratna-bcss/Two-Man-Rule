@@ -11,6 +11,7 @@ from models.tracker import PersonTracker
 from models.door_verifier import DoorVerifier
 from logic.roi_manager import ROIManager
 from logic.state_machine import DualAuthStateMachine
+
 from io_.video_handler import VideoHandler
 from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
@@ -77,12 +78,109 @@ def draw_rois(visualizer: Visualizer, frame: np.ndarray, rois: dict):
         visualizer.draw_roi_label(frame, name, points, color)
 
 
-def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: dict = None) -> dict:
-    """Return labels only for people who are active or verified unlockers.
+def _bbox_height(bbox) -> float:
+    """Return bbox pixel height."""
+    if bbox is None or len(bbox) < 4:
+        return 0.0
+    return float(bbox[3] - bbox[1])
 
-    For verified unlockers (id_a/id_b), attempt anchor-based lookup if direct track_id not found.
-    This ensures continuous tracking even when ByteTrack ID changes or person steps away.
+
+def _bbox_size_matches(ref_bbox, candidate_bbox, tolerance: float = 0.4) -> bool:
+    """True if candidate height is within `tolerance` fraction of reference height."""
+    ref_h = _bbox_height(ref_bbox)
+    if ref_h <= 0:
+        return True  # No reference — don't reject
+    cand_h = _bbox_height(candidate_bbox)
+    if cand_h <= 0:
+        return False
+    ratio = abs(cand_h - ref_h) / ref_h
+    return ratio <= tolerance
+
+
+def _label_verified_slot(
+    slot: str,
+    slot_label: str,
+    state_machine: DualAuthStateMachine,
+    tracked_persons: dict,
+    labels: dict,
+    frame: np.ndarray = None,
+):
+    """Apply verified-unlocker label with multi-factor ReID.
+
+    Priority order:
+    1. Primary ID still tracked — direct.
+    2. Any previously-tagged alt-ID still tracked — identity already confirmed.
+    3. Anchor + size fallback — when tracker ID switches.
     """
+    session = state_machine.session
+    primary_id = session.get(f"id_{slot}")
+    if primary_id is None:
+        return
+
+    primary_id = int(primary_id)
+    tag = f"P{1 if slot == 'a' else 2}_unlocker"
+    other_tag = f"P{2 if slot == 'a' else 1}_unlocker"
+
+    def _is_other_unlocker(tid):
+        return state_machine.unlocker_tags.get(tid) == other_tag
+
+    # 1. Primary ID directly tracked
+    if primary_id in tracked_persons:
+        labels[primary_id] = f"{slot_label} ID {primary_id}"
+        return
+
+    # 2. Any tagged alt-ID still tracked
+    for alt_id in state_machine.get_all_ids_for_tag(tag):
+        if alt_id in tracked_persons and alt_id not in labels:
+            labels[alt_id] = f"{slot_label} (alt ID {alt_id})"
+            print(f"[VIZ] {slot_label} alt-ID {alt_id} (primary={primary_id})")
+            return
+
+    # Build unlabelled, non-other-unlocker candidates
+    candidates = {
+        tid: p for tid, p in tracked_persons.items()
+        if tid not in labels and not _is_other_unlocker(tid)
+    }
+    if not candidates:
+        return
+
+    # 3. Anchor + size fallback
+    anchor = state_machine.verified_anchors.get(slot)
+    ref_bbox = state_machine.last_seen_bbox.get(slot)
+    if anchor is None:
+        return
+
+    wide_threshold = config.UNLOCKER_ANCHOR_MATCH_PIXELS * 5
+    best_dist = float("inf")
+    best_tid = None
+    best_bbox = None
+
+    for tid, person in candidates.items():
+        bbox = person.get("bbox")
+        if bbox is None:
+            continue
+        cx = (bbox[0] + bbox[2]) / 2
+        cy = float(bbox[3])
+        dist = math.dist((cx, cy), anchor)
+        if dist < best_dist:
+            best_dist = dist
+            best_tid = tid
+            best_bbox = bbox
+
+    if best_tid is not None and best_dist <= wide_threshold:
+        if not _bbox_size_matches(ref_bbox, best_bbox, tolerance=0.4):
+            return
+        labels[best_tid] = f"{slot_label} (remapped ID {primary_id})"
+        state_machine.assign_unlocker_tag(best_tid, slot)
+        print(f"[VIZ] {slot_label} anchor-remapped → ID {best_tid} (dist={best_dist:.1f})")
+
+
+def get_unlocker_labels(
+    state_machine: DualAuthStateMachine,
+    tracked_persons: dict = None,
+    frame: np.ndarray = None,
+) -> dict:
+    """Return labels for active candidates and verified unlockers."""
     session = state_machine.session
     labels = {}
     tracked_persons = tracked_persons or {}
@@ -94,63 +192,8 @@ def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: di
         track_id = int(session["candidate_b"])
         labels[track_id] = f"P2 unlocking ID {track_id}"
 
-    # Verified unlockers: try to find by track_id, fall back to anchor matching
-    if session.get("id_a") is not None:
-        track_id = int(session["id_a"])
-        if track_id in tracked_persons:
-            labels[track_id] = f"P1 verified ID {track_id}"
-        elif state_machine.verified_anchors.get("a") is not None:
-            anchor_a = state_machine.verified_anchors["a"]
-            best_dist = float("inf")
-            best_tid = None
-            for tid, person in tracked_persons.items():
-                if tid in labels:
-                    continue
-                bbox = person.get("bbox")
-                if bbox is None:
-                    continue
-                cx = (bbox[0] + bbox[2]) / 2
-                cy = (bbox[1] + bbox[3]) / 2
-                dist = math.dist((cx, cy), anchor_a)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_tid = tid
-
-            if best_tid is not None and best_dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
-                labels[best_tid] = f"P1 verified (remapped) ID {track_id}"
-                print(f"[VIZ] P1 remapped: ID {track_id} → {best_tid} (dist={best_dist:.1f})")
-            elif best_tid is not None:
-                print(f"[VIZ] P1 anchor mismatch: ID {track_id}, best dist={best_dist:.1f} > threshold {config.UNLOCKER_ANCHOR_MATCH_PIXELS}")
-
-    if session.get("id_b") is not None:
-        track_id = int(session["id_b"])
-        if track_id in tracked_persons:
-            labels[track_id] = f"P2 verified ID {track_id}"
-        elif state_machine.verified_anchors.get("b") is not None:
-            anchor_b = state_machine.verified_anchors["b"]
-            best_dist = float("inf")
-            best_tid = None
-            for tid, person in tracked_persons.items():
-                if tid in labels:
-                    continue
-                bbox = person.get("bbox")
-                if bbox is None:
-                    continue
-                cx = (bbox[0] + bbox[2]) / 2
-                cy = (bbox[1] + bbox[3]) / 2
-                dist = math.dist((cx, cy), anchor_b)
-                if dist < best_dist:
-                    best_dist = dist
-                    best_tid = tid
-
-            if best_tid is not None and best_dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
-                labels[best_tid] = f"P2 verified (remapped) ID {track_id}"
-                print(f"[VIZ] P2 remapped: ID {track_id} → {best_tid} (dist={best_dist:.1f})")
-            elif best_tid is not None:
-                print(f"[VIZ] P2 anchor mismatch: ID {track_id}, best dist={best_dist:.1f} > threshold {config.UNLOCKER_ANCHOR_MATCH_PIXELS}")
-
-    for track_id in state_machine.active_ids_in_zone:
-        labels.setdefault(int(track_id), f"Unlock pose ID {int(track_id)}")
+    _label_verified_slot("a", "P1 verified", state_machine, tracked_persons, labels, frame)
+    _label_verified_slot("b", "P2 verified", state_machine, tracked_persons, labels, frame)
 
     return labels
 
@@ -291,7 +334,7 @@ def main(
             # ===== VISUALIZATION =====
             draw_rois(visualizer, frame, active_rois)
 
-            unlocker_labels = get_unlocker_labels(state_machine, tracked_persons)
+            unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
             visible_pose_ids = set(unlocker_labels)
 
             # Draw only locker-door interaction IDs by default. Raw detections can be

@@ -1,0 +1,230 @@
+[
+  {
+    "timestamp": "2026-04-28T14:27:37.100616",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:53.638288",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:54.048162",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:54.275431",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:54.494450",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:54.695481",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:54.899997",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:55.082861",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:55.283848",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:56.144392",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:27:56.978983",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:07.272354",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:07.458368",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:15.738929",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:15.953437",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:16.209673",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:29.948191",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:30.154901",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:30.682438",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:30.892682",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:31.099762",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:31.307468",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:31.738320",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:32.657390",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:32.674730",
+    "event_type": "DUAL_AUTH_SUCCESS",
+    "details": {
+      "person_a": "P1",
+      "person_b": "P2",
+      "timer_a_s": 10.0,
+      "timer_b_s": 10.0,
+      "sequence_state": "READY_FOR_DOOR_OPEN"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:32.862154",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:33.073150",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:33.281463",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:33.473783",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:34.450592",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:34.630096",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T14:28:34.813111",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  }
+]

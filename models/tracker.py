@@ -16,105 +16,109 @@ class PersonTracker:
         self.tracked_persons = {}  # track_id -> person_data
         # ReID history: track_id -> list of recent pose embeddings
         self.reid_history = {}
-        self.reid_max_history = 5  # Keep last 5 embeddings per track
+        self.reid_max_history = 15  # Keep last 15 embeddings (e.g. 0.5s at 30fps) per track
+        self.aliases = {}  # ByteTrack ID -> ReID mapped ID
 
-    def _extract_pose_embedding(self, keypoints: np.ndarray) -> Optional[np.ndarray]:
-        """Extract lightweight pose embedding from keypoints (16-dim feature)."""
+    def _extract_pose_embedding(self, keypoints: np.ndarray) -> Optional[dict]:
+        """Extract biomechanical fingerprint: normalized relational distances between keypoints."""
         if keypoints is None or len(keypoints) < 17:
             return None
 
-        # Robust features: keypoint positions normalized to body bounding box
         valid_kpts = keypoints[:, :2]
         confidences = keypoints[:, 2]
 
-        if len(valid_kpts[confidences > 0.2]) < 5:
+        # Require at least some confident keypoints
+        vis_mask = confidences > 0.3
+        if vis_mask.sum() < 5:
             return None
 
-        # Compute body center and scale
-        valid_mask = confidences > 0.2
-        if not valid_mask.any():
+        # 1. Compute stable normalization metric (torso height)
+        norm_scale = 1.0
+        s_vis = vis_mask[5] and vis_mask[6]
+        h_vis = vis_mask[11] and vis_mask[12]
+        if s_vis and h_vis:
+            shoulder_mid = (valid_kpts[5] + valid_kpts[6]) / 2.0
+            hip_mid = (valid_kpts[11] + valid_kpts[12]) / 2.0
+            norm_scale = float(np.linalg.norm(shoulder_mid - hip_mid))
+        else:
+            # Fallback: max distance between any two visible keypoints
+            visible_pts = valid_kpts[vis_mask]
+            max_dist = 0
+            for i in range(len(visible_pts)):
+                for j in range(i+1, len(visible_pts)):
+                    d = np.linalg.norm(visible_pts[i] - visible_pts[j])
+                    if d > max_dist:
+                        max_dist = d
+            norm_scale = float(max_dist)
+
+        if norm_scale < 1e-6:
             return None
 
-        center = valid_kpts[valid_mask].mean(axis=0)
-        scale = (valid_kpts[valid_mask].std(axis=0).mean() or 1.0) + 1e-6
+        # 2. Compute 136 pairwise distances
+        n = 17
+        distances = []
+        valid_pairs = []
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                if vis_mask[i] and vis_mask[j]:
+                    dist = float(np.linalg.norm(valid_kpts[i] - valid_kpts[j])) / norm_scale
+                    distances.append(dist)
+                    valid_pairs.append(True)
+                else:
+                    distances.append(0.0)
+                    valid_pairs.append(False)
 
-        # Normalize keypoints to [-1, 1] range
-        norm_kpts = (valid_kpts - center) / scale
+        return {
+            "dists": np.array(distances, dtype=np.float32),
+            "mask": np.array(valid_pairs, dtype=bool)
+        }
 
-        # Create 16-dim embedding: sample 16 keypoints' normalized positions
-        embedding_indices = [0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 3]
-        embedding = []
-        for idx in embedding_indices:
-            if idx < len(norm_kpts):
-                embedding.extend([norm_kpts[idx, 0], norm_kpts[idx, 1]])
-
-        return np.array(embedding[:16], dtype=np.float32)
-
-    def _compute_reid_distance(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Compute L2 distance between pose embeddings."""
+    def _compute_reid_distance(self, emb1: dict, emb2: dict) -> float:
+        """Compute cosine distance between biomechanical fingerprints (visible pairs only)."""
         if emb1 is None or emb2 is None:
             return float('inf')
-        return float(np.linalg.norm(emb1 - emb2))
+            
+        mask = emb1["mask"] & emb2["mask"]
+        if mask.sum() < 10:  # Need at least 10 mutual valid pairs to compare
+            return float('inf')
+            
+        v1 = emb1["dists"][mask]
+        v2 = emb2["dists"][mask]
+        
+        norm1 = np.linalg.norm(v1)
+        norm2 = np.linalg.norm(v2)
+        
+        if norm1 < 1e-6 or norm2 < 1e-6:
+            return float('inf')
+            
+        sim = np.dot(v1, v2) / (norm1 * norm2)
+        return float(max(0.0, 1.0 - sim))  # Cosine distance
 
-    def _try_reid_match(self, detections: List[Dict]) -> Dict[int, int]:
-        """
-        Try to match current detections to lost tracks using pose embeddings.
-        Returns: {detection_idx: track_id} for successful ReID matches.
-        """
-        reid_matches = {}
-        if not self.reid_history or not detections:
-            return reid_matches
-
-        # Extract embeddings for current detections
-        current_embeddings = []
-        for det in detections:
-            emb = self._extract_pose_embedding(det.get("keypoints"))
-            current_embeddings.append(emb)
-
-        # Try to match each detection to lost tracks via ReID
-        for det_idx, curr_emb in enumerate(current_embeddings):
-            if curr_emb is None:
-                continue
-
-            best_track_id = None
-            best_distance = 0.3  # Distance threshold
-
-            for track_id, history in self.reid_history.items():
-                if track_id in self.tracked_persons:
-                    continue  # Skip active tracks
-
-                # Average embedding from history
-                hist_embs = np.array(history)
-                avg_emb = hist_embs.mean(axis=0)
-                dist = self._compute_reid_distance(curr_emb, avg_emb)
-
-                if dist < best_distance:
-                    best_distance = dist
-                    best_track_id = track_id
-
-            if best_track_id is not None:
-                reid_matches[det_idx] = best_track_id
-                print(f"[REID] Detection {det_idx} matched to lost track {best_track_id} (dist={best_distance:.3f})")
-
-        return reid_matches
+    def _average_embeddings(self, history: List[dict]) -> dict:
+        """Create a single template fingerprint from a history of frames."""
+        all_dists = np.vstack([h["dists"] for h in history])
+        all_masks = np.vstack([h["mask"] for h in history])
+        
+        avg_dists = np.zeros(136, dtype=np.float32)
+        avg_mask = np.zeros(136, dtype=bool)
+        
+        valid_counts = all_masks.sum(axis=0)
+        
+        for i in range(136):
+            if valid_counts[i] > 0:
+                avg_dists[i] = all_dists[:, i][all_masks[:, i]].mean()
+                avg_mask[i] = True
+                
+        return {"dists": avg_dists, "mask": avg_mask}
 
     def update(self, detections: List[Dict]) -> Dict[int, Dict]:
         """
-        Update tracker with ReID-enhanced ByteTrack.
-
-        Args:
-            detections: List from PoseDetector.detect()
-
-        Returns:
-            Dict: {track_id: {"bbox": ..., "keypoints": ..., "confidence": ...}}
+        Update tracker with ReID-enhanced ByteTrack mapping.
         """
         if not detections:
             return {}
 
-        # Try to recover lost persons via ReID before running ByteTrack
-        reid_matches = self._try_reid_match(detections)
-
-        # Convert to Supervision Detections format
         bboxes = np.array([d["bbox"] for d in detections])
         confidences = np.array([d["confidence"] for d in detections])
 
@@ -127,36 +131,79 @@ class PersonTracker:
         # Run ByteTrack
         tracked_dets = self.tracker.update_with_detections(sup_detections)
 
-        # Update tracked persons and embeddings
+        current_tracked_ids = set()
+        det_by_b_id = {}
+
+        # 1. Match ByteTrack output back to original detections (for keypoints)
+        for i in range(len(tracked_dets)):
+            b_id_int = int(tracked_dets.tracker_id[i])
+            t_box = tracked_dets.xyxy[i]
+
+            best_det = None
+            best_dist = float('inf')
+            for d in detections:
+                d_box = d["bbox"]
+                # Match by top-left coordinate distance
+                dist = np.linalg.norm(np.array(t_box[:2]) - np.array(d_box[:2]))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_det = d
+
+            if best_det is None:
+                continue
+
+            # Resolve Alias
+            true_id = self.aliases.get(b_id_int, b_id_int)
+            det_by_b_id[b_id_int] = (true_id, best_det)
+            current_tracked_ids.add(true_id)
+
+        # 2. ReID verification for "Lost" IDs (Tracks in history but missing from current scene)
+        lost_ids = [tid for tid in self.reid_history.keys() if tid not in current_tracked_ids]
+
+        for lost_id in lost_ids:
+            history = self.reid_history[lost_id]
+            if not history:
+                continue
+
+            lost_template = self._average_embeddings(history)
+
+            best_b_id = None
+            # The threshold for >90% Confidence (Cosine distance < 0.10)
+            best_dist = 0.10  
+
+            # Check all persons in the full scene to see if anyone matches this lost ID
+            for b_id_int, (true_id, det) in det_by_b_id.items():
+                curr_emb = self._extract_pose_embedding(det.get("keypoints"))
+                dist = self._compute_reid_distance(lost_template, curr_emb)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_b_id = b_id_int
+
+            if best_b_id is not None:
+                # We found someone >90% similar! Reassign ID.
+                old_true_id = det_by_b_id[best_b_id][0]
+                print(f"[REID] Tracker ID {lost_id} lost. Full scene check matched with {(1.0-best_dist)*100:.1f}% confidence. Reassigning ID {old_true_id} -> {lost_id}")
+                
+                self.aliases[best_b_id] = lost_id
+                det_by_b_id[best_b_id] = (lost_id, det_by_b_id[best_b_id][1])
+                
+                current_tracked_ids.add(lost_id)
+                if old_true_id in current_tracked_ids and old_true_id != lost_id:
+                    current_tracked_ids.remove(old_true_id)
+
+        # 3. Finalize and Store Keypoint Arrays (Last stack of arrays)
         new_tracked = {}
-        for i, track_id in enumerate(tracked_dets.tracker_id):
-            if i < len(detections):
-                track_id_int = int(track_id)
-                person_data = {**detections[i], "track_id": track_id_int}
-                new_tracked[track_id_int] = person_data
+        for b_id_int, (true_id, det) in det_by_b_id.items():
+            person_data = {**det, "track_id": true_id}
+            new_tracked[true_id] = person_data
 
-                # Store pose embedding for ReID history
-                emb = self._extract_pose_embedding(detections[i].get("keypoints"))
-                if emb is not None:
-                    if track_id_int not in self.reid_history:
-                        self.reid_history[track_id_int] = []
-                    self.reid_history[track_id_int].append(emb)
-                    # Keep only recent history
-                    if len(self.reid_history[track_id_int]) > self.reid_max_history:
-                        self.reid_history[track_id_int].pop(0)
-
-        # Remove history for tracks no longer active
-        active_ids = set(new_tracked.keys())
-        orphaned_ids = []
-        for track_id in self.reid_history:
-            if track_id not in active_ids:
-                orphaned_ids.append(track_id)
-
-        # Keep orphaned histories for potential re-identification (up to buffer frames)
-        for track_id in list(self.reid_history.keys()):
-            if track_id not in active_ids:
-                # Decay: keep for ReID matching but mark as candidates
-                pass
+            emb = self._extract_pose_embedding(det.get("keypoints"))
+            if emb is not None:
+                if true_id not in self.reid_history:
+                    self.reid_history[true_id] = []
+                self.reid_history[true_id].append(emb)
+                if len(self.reid_history[true_id]) > self.reid_max_history:
+                    self.reid_history[true_id].pop(0)
 
         self.tracked_persons = new_tracked
         return self.tracked_persons

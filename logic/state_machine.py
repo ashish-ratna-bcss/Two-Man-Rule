@@ -11,6 +11,7 @@ from logic.person_memory import PersonMemory
 HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
 
 
+
 class DualAuthStateMachine:
     """
     Sequential dual-custody unlock state machine.
@@ -44,12 +45,19 @@ class DualAuthStateMachine:
         self.slot_anchors = {"a": None, "b": None}
         self.verified_anchors = {"a": None, "b": None}
 
-        # Persistent memory for verified persons
-        if session_id is None:
-            from datetime import datetime
-            session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.person_memory = PersonMemory(session_id)
-        self.recorded_persons = set()  # Track which IDs already recorded
+        # Unlocker tagging: multiple IDs per person with same tag
+        # unlocker_tags[track_id] = "P1_unlocker" or "P2_unlocker"
+        # all_unlocker_ids["P1_unlocker"] = {main_id, alt_id1, alt_id2, ...}
+        self.unlocker_tags = {}  # track_id -> "P1_unlocker" or "P2_unlocker"
+        self.all_unlocker_ids = {"P1_unlocker": set(), "P2_unlocker": set()}
+
+        # Body fingerprints saved at qualification: slot -> {height, width, pose_emb}
+        # Used for multi-factor ReID to prevent wrong-person swaps
+        self.body_fingerprints = {"a": None, "b": None}
+
+        # Last known bbox per slot — updated every frame the person is directly detected
+        # Used to validate anchor-based re-ID candidates (same body size = same person)
+        self.last_seen_bbox = {"a": None, "b": None}
 
     # ================================================================
     # CENSUS / CLEARANCE
@@ -135,23 +143,27 @@ class DualAuthStateMachine:
             candidate_id = self.session.get(f"candidate_{slot}")
             timer = self.session.get(f"timer_{slot}_frames", 0)
 
-            # Assigned person: add if available, else stay in system via grace buffer logic
+            # Assigned person: id_a/id_b are FIXED after assignment — never changed here.
+            # Visualization layer handles display remapping via crop-reid independently.
             if assigned_id is not None:
                 if assigned_id in pose_results:
                     interacting_ids.add(assigned_id)
-                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} qualified (in pose_results)")
+                    # Refresh last-known bbox while person is directly visible
+                    if assigned_id in tracked_persons:
+                        bbox = tracked_persons[assigned_id].get("bbox")
+                        if bbox is not None:
+                            self.last_seen_bbox[slot] = bbox
                 else:
-                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} lost from pose_results, grace buffer will maintain")
-                    # Create synthetic entry with all required keys for lost assigned person
-                    if assigned_id not in pose_results:
-                        pose_results[assigned_id] = {
-                            "qualified": True,
-                            "has_lock_contact": True,
-                            "head_in_interaction": True,
-                            "feet_in_standing": True,
-                            "anchor": self.verified_anchors[slot]
-                        }
-                        interacting_ids.add(assigned_id)
+                    # Person lost from tracker — hold via synthetic entry (grace buffer handles expiry)
+                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} not in tracker, synthetic hold")
+                    pose_results[assigned_id] = {
+                        "qualified": True,
+                        "has_lock_contact": True,
+                        "head_in_interaction": True,
+                        "feet_in_standing": True,
+                        "anchor": self.verified_anchors[slot]
+                    }
+                    interacting_ids.add(assigned_id)
                 continue
 
             # Candidate: stay qualified if timer started and still tracked
@@ -266,6 +278,7 @@ class DualAuthStateMachine:
             return
 
         self.session[id_key] = candidate_id
+        self.assign_unlocker_tag(candidate_id, slot)
         self.verified_anchors[slot] = self.slot_anchors[slot]
         self.session[candidate_key] = None
         self.session[grace_key] = 0
@@ -320,19 +333,8 @@ class DualAuthStateMachine:
             if current_id in pose_results:
                 self.verified_anchors[slot] = self._smooth_anchor(anchor, pose_results[current_id]["anchor"])
                 continue
-
-            # Do not remap a verified P1/P2 onto someone currently performing a
-            # new unlock pose. That person may be the next valid custodian in the
-            # same standing zone.
-            non_unlock_pose_ids = {
-                track_id for track_id, pose in pose_results.items()
-                if not pose["qualified"]
-            }
-            remapped_id = self._find_matching_track(anchor, non_unlock_pose_ids, pose_results, set(), [])
-            if remapped_id is not None:
-                print(f"[TRACK] P{1 if slot == 'a' else 2} verified person remapped to current tracker ID")
-                self.session[id_key] = remapped_id
-                self.verified_anchors[slot] = self._smooth_anchor(anchor, pose_results[remapped_id]["anchor"])
+            # id_a/id_b are frozen after assignment — no spatial remapping here.
+            # Visualization layer (crop-reid) handles display-level re-identification.
 
     def _candidate_choices(self, interacting_ids, pose_results, excluded_ids, excluded_anchors):
         choices = []
@@ -732,6 +734,90 @@ class DualAuthStateMachine:
                 pose_results[assigned_id]["qualified"] = True
                 pose_results[assigned_id]["occlusion_mode"] = True
                 print(f"[OCCLUSION] P{1 if slot == 'a' else 2} fallback qualified")
+
+    # ================================================================
+    # UNLOCKER TAGGING (Redundant ID tracking per person)
+    # ================================================================
+    def assign_unlocker_tag(self, track_id: int, slot: str) -> None:
+        """
+        Tag a track ID with unlocker slot. Multiple IDs can share same tag.
+        This enables ID continuity: if track_id is lost, a new ID can get same tag.
+
+        Args:
+            track_id: ByteTrack ID to tag
+            slot: 'a' (P1) or 'b' (P2)
+        """
+        tag = f"P{1 if slot == 'a' else 2}_unlocker"
+        self.unlocker_tags[track_id] = tag
+        self.all_unlocker_ids[tag].add(track_id)
+        print(f"[TAG] ID {track_id} tagged as {tag}")
+
+    def get_unlocker_by_tag(self, tag: str) -> Optional[int]:
+        """Get current primary ID for unlocker tag."""
+        ids = self.all_unlocker_ids.get(tag, set())
+        if ids:
+            return min(ids)  # Return earliest assigned ID as primary
+        return None
+
+    def get_all_ids_for_tag(self, tag: str) -> Set[int]:
+        """Get all IDs ever assigned to this unlocker."""
+        return self.all_unlocker_ids.get(tag, set()).copy()
+
+    def is_unlocker_tracked(self, slot: str, tracked_persons: Dict[int, Dict]) -> bool:
+        """
+        Check if unlocker is currently tracked (by ANY of their IDs).
+        Enables tracking continuity across ID changes.
+        """
+        tag = f"P{1 if slot == 'a' else 2}_unlocker"
+        unlocker_ids = self.all_unlocker_ids.get(tag, set())
+        return any(track_id in tracked_persons for track_id in unlocker_ids)
+
+    def try_reassign_unlocker_id(self, slot: str, tracked_persons: Dict[int, Dict], anchor: Optional[Tuple]) -> Optional[int]:
+        """
+        If unlocker's current ID is lost, find new ID by anchor matching.
+        Assign new ID same unlocker tag for continuity.
+
+        Returns: New track_id if match found, else None
+        """
+        tag = f"P{1 if slot == 'a' else 2}_unlocker"
+        current_id = self.session.get(f"id_{slot}")
+
+        # Already have valid current ID tracked
+        if current_id is not None and current_id in tracked_persons:
+            return None
+
+        # Find new ID matching anchor
+        if anchor is None:
+            return None
+
+        best_match = None
+        best_dist = config.UNLOCKER_ANCHOR_MATCH_PIXELS
+
+        for track_id, person in tracked_persons.items():
+            # Skip if already tagged as different unlocker
+            if track_id in self.unlocker_tags and self.unlocker_tags[track_id] != tag:
+                continue
+            # Skip if already our unlocker
+            if track_id in self.all_unlocker_ids[tag]:
+                continue
+
+            bbox = person.get("bbox")
+            if bbox is None:
+                continue
+
+            center = self._bbox_bottom_center(bbox)
+            dist = np.linalg.norm(np.array(center) - np.array(anchor))
+
+            if dist < best_dist:
+                best_dist = dist
+                best_match = track_id
+
+        if best_match is not None:
+            self.assign_unlocker_tag(best_match, slot)
+            print(f"[REASSIGN] P{1 if slot == 'a' else 2} ID {current_id} lost, reassigned to ID {best_match} (dist={best_dist:.1f})")
+            return best_match
+
+        return None
 
     # ================================================================
     # AUTHORIZATION
