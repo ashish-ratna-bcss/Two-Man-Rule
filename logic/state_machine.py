@@ -328,6 +328,7 @@ class DualAuthStateMachine:
             "qualified": False,
             "head_in_interaction": False,
             "feet_in_standing": False,
+            "waist_near_door": False,
             "contact_a": False,
             "contact_b": False,
             "left_arm_engaged": False,
@@ -351,6 +352,8 @@ class DualAuthStateMachine:
         result["feet_in_standing"] = self.roi_manager.point_in_roi("STANDING_ZONE", fx, fy)
         result["anchor"] = self._person_anchor(keypoints, bbox, head_pos, (fx, fy))
 
+        result["waist_near_door"] = self._waist_near_door(keypoints, bbox)
+
         result["contact_a"] = self._side_contacts_lock(keypoints, "left", "LOCK_A_ROI") or self._side_contacts_lock(
             keypoints, "right", "LOCK_A_ROI"
         )
@@ -366,6 +369,7 @@ class DualAuthStateMachine:
         result["qualified"] = (
             result["head_in_interaction"]
             and result["feet_in_standing"]
+            and result["waist_near_door"]
             and result["contact_a"]
             and result["contact_b"]
             and result["left_arm_engaged"]
@@ -374,6 +378,21 @@ class DualAuthStateMachine:
             and result["left_right_order"]
         )
         return result
+
+    def _waist_near_door(self, keypoints: np.ndarray, bbox) -> bool:
+        hr_x, hr_y, hr_c = keypoints[config.KEYPOINT_HIP_RIGHT]
+        hl_x, hl_y, hl_c = keypoints[config.KEYPOINT_HIP_LEFT]
+
+        waist_pos = None
+        if hr_c >= config.ARM_KEYPOINT_CONFIDENCE_THRESHOLD:
+            waist_pos = (float(hr_x), float(hr_y))
+        elif hl_c >= config.ARM_KEYPOINT_CONFIDENCE_THRESHOLD:
+            waist_pos = (float(hl_x), float(hl_y))
+
+        if waist_pos is None:
+            return False
+
+        return self.roi_manager.point_in_roi("DOOR_ROI", waist_pos[0], waist_pos[1])
 
     def _update_improper_positioning(self, pose_results: Dict[int, Dict]):
         self.session["improper_positioning"] = None
