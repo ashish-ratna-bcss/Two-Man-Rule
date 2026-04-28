@@ -136,6 +136,7 @@ class DualAuthStateMachine:
                 frame_step=frame_step,
             )
         else:
+            self._validate_both_ids_in_interaction_zone(tracked_persons, pose_results)
             self.session["sequence_state"] = "READY_FOR_DOOR_OPEN"
 
     def _update_unlock_slot(
@@ -248,6 +249,25 @@ class DualAuthStateMachine:
         self.session.update(config.create_session())
         self.slot_anchors = {"a": None, "b": None}
         self.verified_anchors = {"a": None, "b": None}
+
+    def _validate_both_ids_in_interaction_zone(self, tracked_persons: Dict[int, Dict], pose_results: Dict[int, Dict]):
+        """Verify both assigned persons have heads in INTERACTION_ZONE."""
+        id_a = self.session.get("id_a")
+        id_b = self.session.get("id_b")
+
+        if id_a is not None and id_a in pose_results:
+            pose_a = pose_results[id_a]
+            if pose_a.get("head_in_interaction"):
+                print(f"[VALIDATION] P1 (ID {id_a}) head confirmed in INTERACTION_ZONE")
+            else:
+                print(f"[VALIDATION] P1 (ID {id_a}) head NOT in INTERACTION_ZONE")
+
+        if id_b is not None and id_b in pose_results:
+            pose_b = pose_results[id_b]
+            if pose_b.get("head_in_interaction"):
+                print(f"[VALIDATION] P2 (ID {id_b}) head confirmed in INTERACTION_ZONE")
+            else:
+                print(f"[VALIDATION] P2 (ID {id_b}) head NOT in INTERACTION_ZONE")
 
     def _refresh_verified_slots(self, pose_results: Dict[int, Dict]):
         for slot in ("a", "b"):

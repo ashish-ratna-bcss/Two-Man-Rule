@@ -101,6 +101,8 @@ def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: di
             labels[track_id] = f"P1 verified ID {track_id}"
         elif state_machine.verified_anchors.get("a") is not None:
             anchor_a = state_machine.verified_anchors["a"]
+            best_dist = float("inf")
+            best_tid = None
             for tid, person in tracked_persons.items():
                 if tid in labels:
                     continue
@@ -110,9 +112,15 @@ def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: di
                 cx = (bbox[0] + bbox[2]) / 2
                 cy = (bbox[1] + bbox[3]) / 2
                 dist = math.dist((cx, cy), anchor_a)
-                if dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
-                    labels[tid] = f"P1 verified (remapped) ID {track_id}"
-                    break
+                if dist < best_dist:
+                    best_dist = dist
+                    best_tid = tid
+
+            if best_tid is not None and best_dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
+                labels[best_tid] = f"P1 verified (remapped) ID {track_id}"
+                print(f"[VIZ] P1 remapped: ID {track_id} → {best_tid} (dist={best_dist:.1f})")
+            elif best_tid is not None:
+                print(f"[VIZ] P1 anchor mismatch: ID {track_id}, best dist={best_dist:.1f} > threshold {config.UNLOCKER_ANCHOR_MATCH_PIXELS}")
 
     if session.get("id_b") is not None:
         track_id = int(session["id_b"])
@@ -120,6 +128,8 @@ def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: di
             labels[track_id] = f"P2 verified ID {track_id}"
         elif state_machine.verified_anchors.get("b") is not None:
             anchor_b = state_machine.verified_anchors["b"]
+            best_dist = float("inf")
+            best_tid = None
             for tid, person in tracked_persons.items():
                 if tid in labels:
                     continue
@@ -129,9 +139,15 @@ def get_unlocker_labels(state_machine: DualAuthStateMachine, tracked_persons: di
                 cx = (bbox[0] + bbox[2]) / 2
                 cy = (bbox[1] + bbox[3]) / 2
                 dist = math.dist((cx, cy), anchor_b)
-                if dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
-                    labels[tid] = f"P2 verified (remapped) ID {track_id}"
-                    break
+                if dist < best_dist:
+                    best_dist = dist
+                    best_tid = tid
+
+            if best_tid is not None and best_dist <= config.UNLOCKER_ANCHOR_MATCH_PIXELS:
+                labels[best_tid] = f"P2 verified (remapped) ID {track_id}"
+                print(f"[VIZ] P2 remapped: ID {track_id} → {best_tid} (dist={best_dist:.1f})")
+            elif best_tid is not None:
+                print(f"[VIZ] P2 anchor mismatch: ID {track_id}, best dist={best_dist:.1f} > threshold {config.UNLOCKER_ANCHOR_MATCH_PIXELS}")
 
     for track_id in state_machine.active_ids_in_zone:
         labels.setdefault(int(track_id), f"Unlock pose ID {int(track_id)}")
