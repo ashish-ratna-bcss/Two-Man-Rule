@@ -170,7 +170,7 @@ class DualAuthStateMachine:
             self.session["sequence_state"] = (
                 "FIRST_UNLOCKER_ACTIVE" if slot == "a" else "SECOND_UNLOCKER_ACTIVE"
             )
-            print(f"[TIMER] P{1 if slot == 'a' else 2} unlock pose confirmed")
+            print(f"[TIMER] P{1 if slot == 'a' else 2} unlock pose confirmed, ID {candidate_id}")
 
         if candidate_id in excluded_ids:
             self._reset_candidate(slot)
@@ -186,9 +186,11 @@ class DualAuthStateMachine:
                 excluded_anchors,
             )
             if remapped_id is not None:
-                print(f"[TRACK] P{1 if slot == 'a' else 2} raw tracker changed; continuing same unlocker")
+                print(f"[TRACK] P{1 if slot == 'a' else 2} remapped {candidate_id} → {remapped_id}")
                 candidate_id = remapped_id
                 self.session[candidate_key] = candidate_id
+            else:
+                print(f"[TRACK] P{1 if slot == 'a' else 2} ID {candidate_id} lost, no match in interacting_ids={sorted(interacting_ids)}")
 
         current_timer = self.session[timer_key]
         if candidate_id in interacting_ids:
@@ -207,10 +209,11 @@ class DualAuthStateMachine:
 
         if self.session[grace_key] > 0 and current_timer > 0:
             self.session[grace_key] = max(self.session[grace_key] - frame_step, 0)
+            print(f"[GRACE] P{1 if slot == 'a' else 2} grace buffer {self.session[grace_key]} frames, timer {current_timer}s")
             return
 
         if current_timer > 0:
-            print(f"[TIMER] P{1 if slot == 'a' else 2} left before 6s - reset")
+            print(f"[TIMER] P{1 if slot == 'a' else 2} disqualified at {current_timer}s, candidate lost - reset")
         self._reset_candidate(slot)
 
     def _complete_unlock_slot(self, slot: str):
@@ -397,6 +400,28 @@ class DualAuthStateMachine:
             and result["arms_raised"]
             and result["left_right_order"]
         )
+
+        if not result["qualified"]:
+            failed = []
+            if not result["head_in_interaction"]:
+                failed.append("head_not_in_interaction")
+            if not result["feet_in_standing"]:
+                failed.append("feet_not_in_standing")
+            if not result["waist_near_door"]:
+                failed.append("waist_not_near_door")
+            if not result["contact_a"]:
+                failed.append("no_contact_a")
+            if not result["contact_b"]:
+                failed.append("no_contact_b")
+            if not result["left_arm_engaged"]:
+                failed.append("left_arm_not_engaged")
+            if not result["right_arm_engaged"]:
+                failed.append("right_arm_not_engaged")
+            if not result["arms_raised"]:
+                failed.append("arms_not_raised")
+            if not result["left_right_order"]:
+                failed.append("left_right_order_wrong")
+
         return result
 
     def _waist_near_door(self, keypoints: np.ndarray, bbox) -> bool:
