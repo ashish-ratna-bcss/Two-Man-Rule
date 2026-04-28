@@ -5,6 +5,7 @@ import numpy as np
 
 import config
 from logic.roi_manager import ROIManager
+from logic.person_memory import PersonMemory
 
 
 HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
@@ -20,7 +21,7 @@ class DualAuthStateMachine:
     a raw tracker detection and is ignored by the authorization logic.
     """
 
-    def __init__(self, roi_manager: ROIManager, fps: int = 30):
+    def __init__(self, roi_manager: ROIManager, fps: int = 30, session_id: Optional[str] = None):
         self.roi_manager = roi_manager
         self.fps = max(int(fps or config.DEFAULT_FPS), 1)
         self.dwell_frames = config.calculate_min_unlock_frames(self.fps)
@@ -42,6 +43,13 @@ class DualAuthStateMachine:
         # Stable physical-person anchors. These let P1/P2 survive raw tracker ID churn.
         self.slot_anchors = {"a": None, "b": None}
         self.verified_anchors = {"a": None, "b": None}
+
+        # Persistent memory for verified persons
+        if session_id is None:
+            from datetime import datetime
+            session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.person_memory = PersonMemory(session_id)
+        self.recorded_persons = set()  # Track which IDs already recorded
 
     # ================================================================
     # CENSUS / CLEARANCE
