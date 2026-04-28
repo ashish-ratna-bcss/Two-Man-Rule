@@ -5,17 +5,36 @@ from typing import List, Dict, Tuple, Optional
 import config
 
 class PoseDetector:
-    """YOLOv11-Pose wrapper for skeleton detection."""
+    """YOLOv8-Pose wrapper for skeleton detection."""
 
-    def __init__(self, model_path: str = None):
-        """Load YOLOv11-Pose model."""
+    def __init__(self, model_path: str = None, device: str = "auto", half: bool = True):
+        """Load YOLOv8-Pose model on GPU if available."""
+        import torch
         model_path = model_path or config.YOLO_POSE_MODEL
+        if device == "auto":
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        else:
+            self.device = device
+            if self.device == "cuda" and not torch.cuda.is_available():
+                print("[PoseDetector] CUDA requested but unavailable; falling back to CPU")
+                self.device = "cpu"
+
+        self.use_half = bool(half and self.device == "cuda")
+        if self.device == "cuda":
+            torch.backends.cudnn.benchmark = True
+
+        print(f"[PoseDetector] Device: {self.device}")
+        if self.device == 'cuda':
+            print(f"[PoseDetector] GPU: {torch.cuda.get_device_name(0)}")
+            print(f"[PoseDetector] Half precision: {self.use_half}")
         self.model = YOLO(model_path)
+        self.model.to(self.device)  # Move model weights to GPU
+        print(f"[PoseDetector] Model loaded on {self.device}")
         self.last_results = None
 
     def detect(self, frame: np.ndarray) -> List[Dict]:
         """
-        Run pose detection on frame.
+        Run pose detection on frame using GPU.
 
         Returns:
             List of detections: [
@@ -28,7 +47,7 @@ class PoseDetector:
                 ...
             ]
         """
-        results = self.model(frame, conf=0.5, verbose=False)
+        results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
         detections = []
 
         if results and len(results) > 0:

@@ -1,0 +1,79 @@
+[
+  {
+    "timestamp": "2026-04-28T13:07:09.096068",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:22.953866",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:23.272800",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:23.443470",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:23.606391",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:23.772566",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:23.940886",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:24.120371",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:24.316067",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:24.927774",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:07:25.477084",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  }
+]

@@ -121,6 +121,43 @@ class DualAuthStateMachine:
             if pose["qualified"]:
                 interacting_ids.add(track_id)
 
+        # Strictly persist assigned/candidate persons - keep them qualified if still tracked
+        for slot in ("a", "b"):
+            # Assigned IDs are STICKY - keep them as long as track ID exists
+            assigned_id = self.session.get(f"id_{slot}")
+            if assigned_id is not None:
+                if assigned_id in tracked_persons:
+                    interacting_ids.add(assigned_id)
+                    print(f"[STRICT] P{1 if slot == 'a' else 2} assigned ID {assigned_id} stays (sticky)")
+                    continue
+                else:
+                    # Try closest person by anchor only if assigned person completely gone
+                    anchor = self.verified_anchors[slot]
+                    if anchor is not None:
+                        best_id = None
+                        best_distance = float("inf")
+                        for track_id in tracked_persons.keys():
+                            candidate_anchor = pose_results.get(track_id, {}).get("anchor")
+                            if candidate_anchor is None:
+                                continue
+                            distance = self._anchor_distance(anchor, candidate_anchor)
+                            if distance < best_distance:
+                                best_id = track_id
+                                best_distance = distance
+
+                        if best_id is not None and best_distance <= 250:
+                            interacting_ids.add(best_id)
+                            self.session[f"id_{slot}"] = best_id
+                            print(f"[STRICT] P{1 if slot == 'a' else 2} reassigned {assigned_id} → {best_id} (dist={best_distance:.0f}px)")
+                            continue
+
+            # Candidates with timer accumulation stay qualified if tracked
+            candidate_id = self.session.get(f"candidate_{slot}")
+            timer = self.session.get(f"timer_{slot}_frames", 0)
+            if candidate_id is not None and timer > 0 and candidate_id in tracked_persons:
+                interacting_ids.add(candidate_id)
+                print(f"[STRICT] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f) stays")
+
         self._refresh_verified_slots(pose_results)
         self.active_ids_in_zone = interacting_ids
         self._update_improper_positioning(pose_results)
@@ -401,7 +438,9 @@ class DualAuthStateMachine:
             and result["left_right_order"]
         )
 
-        if not result["qualified"]:
+        if result["qualified"]:
+            print("[POSE] Qualified: all conditions pass")
+        else:
             failed = []
             if not result["head_in_interaction"]:
                 failed.append("head_not_in_interaction")
@@ -421,6 +460,7 @@ class DualAuthStateMachine:
                 failed.append("arms_not_raised")
             if not result["left_right_order"]:
                 failed.append("left_right_order_wrong")
+            print(f"[POSE] Disqualified: {', '.join(failed)}")
 
         return result
 

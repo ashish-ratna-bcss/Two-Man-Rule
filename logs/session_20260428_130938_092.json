@@ -1,0 +1,279 @@
+[
+  {
+    "timestamp": "2026-04-28T13:08:24.329926",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:38.327532",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:38.666286",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:38.846153",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:39.016667",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:39.202627",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:39.371680",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:39.548804",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:39.719335",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:40.303705",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:40.866371",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:47.752871",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:47.918239",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:55.196267",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:55.367726",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:08:55.532676",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:07.195889",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:07.364805",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:07.843473",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:08.002253",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:08.167943",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:08.327866",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:08.661434",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 unlocking ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:09.448925",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:09.457466",
+    "event_type": "DUAL_AUTH_SUCCESS",
+    "details": {
+      "person_a": "P1",
+      "person_b": "P2",
+      "timer_a_s": 10.0,
+      "timer_b_s": 10.0,
+      "sequence_state": "READY_FOR_DOOR_OPEN"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:09.623485",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:09.781905",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:09.947812",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:10.110549",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:10.875658",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:11.034479",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:11.195697",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:30.786977",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:30.958137",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:31.123508",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:31.283259",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:31.444004",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P2 verified ID 7"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:31.606249",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:09:31.801922",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "timestamp": "2026-04-28T12:53:12.991236",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  }
+]

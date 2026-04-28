@@ -1,0 +1,93 @@
+[
+  {
+    "timestamp": "2026-04-28T13:03:08.452322",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:22.323702",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:22.667764",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 unlocking ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:22.830008",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:22.984764",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:23.157760",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:23.361112",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:23.528447",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:23.689919",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:24.260008",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:24.828197",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "P1 verified ID 2"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:31.706289",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  },
+  {
+    "timestamp": "2026-04-28T13:03:31.878029",
+    "event_type": "IMPROPER_POSITIONING",
+    "details": {
+      "person": "ignored detection"
+    }
+  }
+]

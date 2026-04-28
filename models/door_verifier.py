@@ -8,7 +8,7 @@ import config
 class DoorVerifier:
     """Verifies door open/closed state via SSIM comparison."""
 
-    def __init__(self, reference_image_path: str, threshold: float = None):
+    def __init__(self, reference_image_path: str, threshold: float = None, door_roi=None):
         """
         Initialize with reference (closed door) image.
 
@@ -23,17 +23,20 @@ class DoorVerifier:
         # Convert to grayscale for SSIM
         self.reference_gray = cv2.cvtColor(self.reference, cv2.COLOR_BGR2GRAY)
         self.threshold = threshold or config.SSIM_THRESHOLD
+        self.door_roi = np.array(door_roi, dtype=np.int32) if door_roi is not None else config.DOOR_ROI
         self.last_ssim = None
 
     def extract_door_roi(self, frame: np.ndarray) -> np.ndarray:
         """Extract DOOR_ROI polygon from frame."""
-        if config.DOOR_ROI is None:
+        if self.door_roi is None:
             raise ValueError("DOOR_ROI not configured")
 
         # Create mask for polygon
         mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        points = np.array(config.DOOR_ROI, dtype=np.int32)
+        points = np.array(self.door_roi, dtype=np.int32)
         cv2.fillPoly(mask, [points], 255)
+        if cv2.countNonZero(mask) == 0:
+            return frame
 
         # Extract ROI
         roi = cv2.bitwise_and(frame, frame, mask=mask)
@@ -48,22 +51,30 @@ class DoorVerifier:
             False if door is CLOSED (SSIM >= threshold)
         """
         try:
+            reference = self.reference
+            if reference.shape[:2] != frame.shape[:2]:
+                reference = cv2.resize(reference, (frame.shape[1], frame.shape[0]))
+
+            reference_roi = self.extract_door_roi(reference)
             door_roi = self.extract_door_roi(frame)
+            reference_gray = cv2.cvtColor(reference_roi, cv2.COLOR_BGR2GRAY)
             door_roi_gray = cv2.cvtColor(door_roi, cv2.COLOR_BGR2GRAY)
 
             # Ensure same dimensions
-            if door_roi_gray.shape != self.reference_gray.shape:
+            if door_roi_gray.shape != reference_gray.shape:
                 door_roi_gray = cv2.resize(
                     door_roi_gray,
-                    (self.reference_gray.shape[1], self.reference_gray.shape[0])
+                    (reference_gray.shape[1], reference_gray.shape[0])
                 )
 
             # Calculate SSIM
-            self.last_ssim, _ = ssim(
-                self.reference_gray,
+            result = ssim(
+                reference_gray,
                 door_roi_gray,
                 full=False
             )
+            # Handle both tuple (mssim, grad) and scalar return
+            self.last_ssim = float(result) if isinstance(result, (int, float, np.floating)) else result[0]
 
             # Door is CLOSED if SSIM is HIGH
             return self.last_ssim < self.threshold

@@ -10,8 +10,8 @@ class PersonTracker:
     def __init__(self):
         """Initialize ByteTrack."""
         self.tracker = ByteTrack(
-            track_buffer=config.TRACK_BUFFER,
-            track_thresh=config.TRACK_THRESH
+            lost_track_buffer=config.TRACK_BUFFER,
+            track_activation_threshold=config.TRACK_THRESH
         )
         self.tracked_persons = {}  # track_id -> person_data
 
