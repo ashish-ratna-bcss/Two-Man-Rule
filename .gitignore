@@ -1,0 +1,32 @@
+# Logs and Session Data
+logs/
+logs-*/
+*.log
+
+# Caches and Temporary Files
+__pycache__/
+.pytest_cache/
+catches/
+cactches/
+.cache/
+.ipynb_checkpoints/
+
+# Model Weights
+*.pt
+*.pth
+*.weights
+*.h5
+*.onnx
+
+# Environment and IDE
+.venv/
+venv/
+env/
+.env
+.vscode/
+.idea/
+.claude/
+
+# OS specific
+.DS_Store
+Thumbs.db
