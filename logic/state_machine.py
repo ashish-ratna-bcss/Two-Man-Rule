@@ -134,9 +134,15 @@ class DualAuthStateMachine:
                     print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} qualified (in pose_results)")
                 else:
                     print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} lost from pose_results, grace buffer will maintain")
-                    # Mark as having lock contact so _update_unlock_slot doesn't disqualify immediately
+                    # Create synthetic entry with all required keys for lost assigned person
                     if assigned_id not in pose_results:
-                        pose_results[assigned_id] = {"qualified": True, "has_lock_contact": True, "anchor": self.verified_anchors[slot]}
+                        pose_results[assigned_id] = {
+                            "qualified": True,
+                            "has_lock_contact": True,
+                            "head_in_interaction": True,
+                            "feet_in_standing": True,
+                            "anchor": self.verified_anchors[slot]
+                        }
                         interacting_ids.add(assigned_id)
                 continue
 
