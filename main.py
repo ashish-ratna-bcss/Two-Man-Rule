@@ -39,6 +39,7 @@ def setup_rois(roi_manager: ROIManager, width: int, height: int, scale_rois: boo
         "DOOR_ROI": transform(config.DOOR_ROI),
         "STANDING_ZONE": transform(config.STANDING_ZONE),
         "INTERACTION_ZONE": transform(config.INTERACTION_ZONE),
+        "DOOR_CORNER_ROI": transform(config.DOOR_CORNER_ROI),
     }
 
     for name, points in rois.items():
@@ -71,6 +72,7 @@ def draw_rois(visualizer: Visualizer, frame: np.ndarray, rois: dict):
         "LOCK_A_ROI": ((0, 255, 0), 2),
         "LOCK_B_ROI": ((0, 255, 0), 2),
         "DOOR_ROI": ((255, 0, 0), 1),
+        "DOOR_CORNER_ROI": ((255, 255, 255), 2),
     }
     for name, points in rois.items():
         color, thickness = roi_styles[name]
@@ -274,7 +276,7 @@ def main(
         active_rois = setup_rois(roi_manager, width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
         try:
-            door_verifier = DoorVerifier(config.CLOSED_DOOR_REFERENCE, door_roi=active_rois["DOOR_ROI"])
+            door_verifier = DoorVerifier(config.CLOSED_DOOR_REFERENCE)
             print("[SYSTEM] Door verifier loaded.")
         except FileNotFoundError as e:
             print(f"[WARNING] {e}")
@@ -326,8 +328,8 @@ def main(
 
                 is_door_open = False
                 ssim_val = None
-                if door_verifier and state_machine.should_check_door_state():
-                    is_door_open = door_verifier.is_door_open(frame)
+                if door_verifier:
+                    is_door_open = door_verifier.verify(frame)
                     ssim_val = door_verifier.get_last_ssim()
                 inference_ms = (time.perf_counter() - t0) * 1000.0
 
@@ -382,6 +384,15 @@ def main(
             if ssim_val is not None:
                 visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {'OPEN' if is_door_open else 'CLOSED'}", (10, 80))
 
+            # Prominent Top-Right Corner Door Status
+            door_status_text = f"DOOR: {'OPEN' if is_door_open else 'CLOSED'}"
+            door_color = (0, 0, 255) if is_door_open else (0, 255, 0) # Red if open, Green if closed
+            # Use larger font for the corner status
+            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, cv2.LINE_AA) # shadow
+            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, door_color, 2, cv2.LINE_AA)
+
             if not roi_preview_saved:
                 preview_path = os.path.join(EVIDENCE_DIR, "ROI_PREVIEW_first_frame.jpg")
                 cv2.imwrite(preview_path, frame)
@@ -402,13 +413,57 @@ def main(
                                             (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100))
                 capture(alert_system, frame, "IMPROPER_POSITIONING", {"person": bad_label})
 
-            if should_process_frame and is_door_open and n == 0:
-                violation = state_machine.check_door_violation()
-                if violation == "LONE_WOLF":
-                    capture(alert_system, frame, "CRITICAL_VIOLATION_LONE_WOLF",
-                            {"authorized": state_machine.authorized_session_buffer is not None})
+            if should_process_frame and is_door_open:
+                # 1. Gather status of the 2 unlockers
+                id_a = state_machine.session.get("id_a")
+                id_b = state_machine.session.get("id_b")
+                
+                # Check head positions for both IDs
+                heads_in_zone = True
+                for slot, tid in [("P1", id_a), ("P2", id_b)]:
+                    if tid is None or tid not in tracked_persons:
+                        heads_in_zone = False
+                        break
+                    
+                    person = tracked_persons[tid]
+                    # Direct check for head keypoint (index 0) in interaction zone
+                    kpts = person.get("keypoints")
+                    if kpts is None or len(kpts) == 0:
+                        heads_in_zone = False
+                        break
+                        
+                    hx, hy, hc = kpts[0]
+                    if hc < config.HEAD_CONFIDENCE_THRESHOLD or not roi_manager.point_in_roi("INTERACTION_ZONE", hx, hy):
+                        heads_in_zone = False
+                        break
+                
+                # 2. Check Auth and capture
+                if heads_in_zone:
+                    auth_status = "AUTHORIZED" if auth_result["authorized"] else "UNAUTHORIZED"
+                    event_name = f"DOOR_OPEN_{auth_status}_PRESENCE"
+                    
+                    # Only capture once per "door open" event to avoid flooding
+                    if not state_machine.session.get("door_open_captured"):
+                        capture(alert_system, frame, event_name, {
+                            "authorized": auth_result["authorized"],
+                            "p1_id": id_a,
+                            "p2_id": id_b,
+                            "heads_verified": True
+                        })
+                        state_machine.session["door_open_captured"] = True
                 else:
-                    capture(alert_system, frame, "DOOR_OPEN_AUTHORIZED", {"persons": ["P1", "P2"]})
+                    # Door open but heads not verified in zone
+                    if not state_machine.session.get("door_open_captured"):
+                        capture(alert_system, frame, "DOOR_OPEN_UNKNOWN_PRESENCE", {
+                            "authorized": auth_result["authorized"],
+                            "p1_id": id_a,
+                            "p2_id": id_b,
+                            "heads_verified": False
+                        })
+                        state_machine.session["door_open_captured"] = True
+            else:
+                # Reset capture flag when door closes
+                state_machine.session["door_open_captured"] = False
 
             if should_process_frame and auth_result["authorized"] and not state_machine.session.get("auth_success_logged"):
                 capture(alert_system, frame, "DUAL_AUTH_SUCCESS", {

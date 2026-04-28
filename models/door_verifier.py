@@ -6,83 +6,97 @@ from typing import Optional
 import config
 
 class DoorVerifier:
-    """Verifies door open/closed state via SSIM comparison."""
 
-    def __init__(self, reference_image_path: str, threshold: float = None, door_roi=None):
-        """
-        Initialize with reference (closed door) image.
-
-        Args:
-            reference_image_path: Path to closed_ref.jpg
-            threshold: SSIM threshold (default from config)
-        """
-        self.reference = cv2.imread(reference_image_path)
-        if self.reference is None:
+    def __init__(
+        self,
+        reference_image_path: str,
+        similarity_threshold: float = 0.75,
+        debounce_threshold: int = 8
+    ):
+        # Load reference image
+        reference = cv2.imread(reference_image_path)
+        if reference is None:
             raise FileNotFoundError(f"Cannot load reference image: {reference_image_path}")
 
-        # Convert to grayscale for SSIM
-        self.reference_gray = cv2.cvtColor(self.reference, cv2.COLOR_BGR2GRAY)
-        self.threshold = threshold or config.SSIM_THRESHOLD
-        self.door_roi = np.array(door_roi, dtype=np.int32) if door_roi is not None else config.DOOR_ROI
+        # Parse DOOR_CORNER_ROI into crop coords using bounding rect
+        # config.DOOR_CORNER_ROI is a numpy polygon array
+        self.rx, self.ry, self.rw, self.rh = cv2.boundingRect(config.DOOR_CORNER_ROI)
+
+        # Extract and store reference patch (grayscale)
+        ref_crop = reference[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
+        self.reference_patch = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
+
+        # Thresholds
+        self.similarity_threshold = similarity_threshold
+        self.debounce_threshold = debounce_threshold
+
+        # Debounce state
+        self.candidate_state = False      # False = CLOSED
+        self.consecutive_frames_agreed = 0
+        self.stable_is_open = False
+
+        # Debug
         self.last_ssim = None
+        self._frame_tick = 0
 
-    def extract_door_roi(self, frame: np.ndarray) -> np.ndarray:
-        """Extract DOOR_ROI polygon from frame."""
-        if self.door_roi is None:
-            raise ValueError("DOOR_ROI not configured")
+        print(f"[DOOR] Initialized | Corner ROI: {config.DOOR_CORNER_ROI} | Patch shape: {self.reference_patch.shape}")
 
-        # Create mask for polygon
-        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        points = np.array(self.door_roi, dtype=np.int32)
-        cv2.fillPoly(mask, [points], 255)
-        if cv2.countNonZero(mask) == 0:
-            return frame
-
-        # Extract ROI
-        roi = cv2.bitwise_and(frame, frame, mask=mask)
-        return roi
-
-    def is_door_open(self, frame: np.ndarray) -> bool:
+    def verify(self, frame: np.ndarray) -> bool:
         """
-        Check if door is open by comparing SSIM to reference.
-
-        Returns:
-            True if door is OPEN (SSIM < threshold)
-            False if door is CLOSED (SSIM >= threshold)
+        Returns True if door is OPEN, False if CLOSED.
         """
         try:
-            reference = self.reference
-            if reference.shape[:2] != frame.shape[:2]:
-                reference = cv2.resize(reference, (frame.shape[1], frame.shape[0]))
+            # Crop corner ROI from current frame
+            curr_crop = frame[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
+            curr_patch = cv2.cvtColor(curr_crop, cv2.COLOR_BGR2GRAY)
 
-            reference_roi = self.extract_door_roi(reference)
-            door_roi = self.extract_door_roi(frame)
-            reference_gray = cv2.cvtColor(reference_roi, cv2.COLOR_BGR2GRAY)
-            door_roi_gray = cv2.cvtColor(door_roi, cv2.COLOR_BGR2GRAY)
-
-            # Ensure same dimensions
-            if door_roi_gray.shape != reference_gray.shape:
-                door_roi_gray = cv2.resize(
-                    door_roi_gray,
-                    (reference_gray.shape[1], reference_gray.shape[0])
+            # Resize if shape mismatch (camera resolution change etc.)
+            if curr_patch.shape != self.reference_patch.shape:
+                curr_patch = cv2.resize(
+                    curr_patch,
+                    (self.reference_patch.shape[1], self.reference_patch.shape[0])
                 )
 
-            # Calculate SSIM
-            result = ssim(
-                reference_gray,
-                door_roi_gray,
-                full=False
-            )
-            # Handle both tuple (mssim, grad) and scalar return
-            self.last_ssim = float(result) if isinstance(result, (int, float, np.floating)) else result[0]
+            # SSIM comparison
+            self.last_ssim = float(ssim(self.reference_patch, curr_patch, full=False))
 
-            # Door is CLOSED if SSIM is HIGH
-            return self.last_ssim < self.threshold
+            # LOW similarity = corner gone = door OPEN
+            raw_is_open = self.last_ssim < self.similarity_threshold
+
+            # Debounce
+            if raw_is_open == self.candidate_state:
+                self.consecutive_frames_agreed += 1
+            else:
+                self.candidate_state = raw_is_open
+                self.consecutive_frames_agreed = 1
+
+            # Debug every 30 frames
+            self._frame_tick += 1
+            if self._frame_tick % 30 == 0:
+                print(
+                    f"[DOOR] SSIM: {self.last_ssim:.3f} | "
+                    f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'} | "
+                    f"Debounce: {self.consecutive_frames_agreed}/{self.debounce_threshold} "
+                    f"-> {'OPEN' if self.candidate_state else 'CLOSED'}"
+                )
+
+            # Flip stable state only after debounce threshold met
+            if self.consecutive_frames_agreed >= self.debounce_threshold:
+                if self.stable_is_open != self.candidate_state:
+                    print(
+                        f"[DOOR] *** State Flip: "
+                        f"{'CLOSED -> OPEN' if self.candidate_state else 'OPEN -> CLOSED'} "
+                        f"(SSIM={self.last_ssim:.3f}) ***"
+                    )
+                    self.stable_is_open = self.candidate_state
+                # Cap to prevent overflow
+                self.consecutive_frames_agreed = self.debounce_threshold
+
+            return self.stable_is_open
 
         except Exception as e:
-            print(f"[DoorVerifier] Error: {e}")
-            return False
+            print(f"[DoorVerifier] Error in verify(): {e}")
+            return self.stable_is_open
 
     def get_last_ssim(self) -> Optional[float]:
-        """Return last calculated SSIM value."""
         return self.last_ssim

@@ -45,6 +45,14 @@ LOCK_B_ROI = np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450
 
 DOOR_ROI = np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32)
 
+DOOR_CORNER_ROI = np.array([
+    [556, 53], [612, 30], [621, 53], [567, 72]
+], np.int32)
+
+# Reference BGR color for the door corner (from closed_ref.jpg)
+DOOR_CORNER_REF_COLOR = (55.75, 52.93, 48.84)
+DOOR_COLOR_SENSITIVITY = 15.0  # Threshold for opening detection
+
 STANDING_ZONE = np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32)
 
 INTERACTION_ZONE = np.array([(272, 160), (1857, 2), (1750, 714), (275, 1392)], np.int32)
