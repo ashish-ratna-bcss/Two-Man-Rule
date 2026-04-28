@@ -1,5 +1,7 @@
 # main.py
 import sys
+from datetime import datetime, timezone, timedelta
+IST = timezone(timedelta(hours=5, minutes=30))
 import os
 import cv2
 import numpy as np
@@ -17,9 +19,10 @@ from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
 import config
 
-EVIDENCE_DIR = "logs/evidence"
+EVIDENCE_DIR = config.BASE_OUTPUT_DIR
 LOG_DIR = "logs"
 CALIBRATED_W, CALIBRATED_H = 2688, 1520
+CAM_ID = config.RTSP_URLS[0]["camera_id"] # Default camera ID from config
 
 
 def _scale_polygon(points: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -234,12 +237,30 @@ def can_show_live_window(show_live: bool) -> bool:
     return True
 
 
-def capture(alert_system: AlertSystem, frame: np.ndarray, event_type: str, details: dict = None):
-    """Unified capture + log helper."""
-    filepath = alert_system.evidence_dir
-    ts = alert_system._filename_timestamp()
-    filename = f"{event_type}_{ts}.jpg"
-    full_path = os.path.join(filepath, filename)
+def capture(alert_system: AlertSystem, frame: np.ndarray, event_type: str, details: dict = None, check_type: str = "System"):
+    """Unified capture + log helper with custom hierarchy."""
+    now_ist = datetime.now(IST)
+    today_str = now_ist.strftime("%Y-%m-%d")
+    ts = now_ist.strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    
+    # Map event names to folder names
+    folder_type = check_type
+    if "MORNING" in event_type or check_type == "Morning":
+        folder_type = "MorningCheck"
+        prefix_type = "Morning"
+    elif "EVENING" in event_type or check_type == "Evening":
+        folder_type = "EveningCheck"
+        prefix_type = "Evening"
+    else:
+        folder_type = "SystemCheck"
+        prefix_type = "Misc"
+        
+    target_dir = os.path.join(EVIDENCE_DIR, today_str, folder_type)
+    os.makedirs(target_dir, exist_ok=True)
+    
+    filename = f"StrongRoomCheck_{prefix_type}_{CAM_ID}_{ts}.png"
+    full_path = os.path.join(target_dir, filename)
+    
     ok = cv2.imwrite(full_path, frame)
     alert_system.log_event(event_type, details or {})
     print(f"[CAPTURE] {event_type}: {full_path} (write={'OK' if ok else 'FAILED'})")
@@ -286,6 +307,21 @@ def main(
         visualizer = Visualizer()
         alert_system = AlertSystem(evidence_dir=EVIDENCE_DIR, log_dir=LOG_DIR)
 
+        # Determine initial state based on current IST time
+        startup_ist = datetime.now(IST)
+        last_reset_date = startup_ist.strftime("%Y-%m-%d")
+        curr_hm = startup_ist.strftime("%H:%M")
+        
+        # If started after 10:30 AM, morning check is neglected for today
+        morning_check_done = curr_hm > "10:30"
+        # If started after 11:00 PM, evening check is neglected for today
+        evening_check_done = curr_hm > "23:00"
+        
+        if morning_check_done:
+            print(f"[SYSTEM] Startup after 10:30 AM IST. Morning check for {last_reset_date} marked as SKIPPED.")
+        if evening_check_done:
+            print(f"[SYSTEM] Startup after 11:00 PM IST. Evening check for {last_reset_date} marked as SKIPPED.")
+        
         frame_idx = 0
         debug_frame_saved = False
         roi_preview_saved = False
@@ -298,6 +334,7 @@ def main(
             "lock_b_authorized": False,
             "violation_type": "INCOMPLETE",
         }
+        last_door_state = None  # To detect transitions
         is_door_open = False
         ssim_val = None
         live_window_available = can_show_live_window(show_live)
@@ -398,9 +435,10 @@ def main(
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, door_color, 2, cv2.LINE_AA)
 
             if not roi_preview_saved:
-                preview_path = os.path.join(EVIDENCE_DIR, "ROI_PREVIEW_first_frame.jpg")
+                preview_path = os.path.join(EVIDENCE_DIR, f"ROI_PREVIEW_{CAM_ID}.jpg")
+                os.makedirs(EVIDENCE_DIR, exist_ok=True)
                 cv2.imwrite(preview_path, frame)
-                print(f"[ROI] First annotated ROI preview saved: {preview_path}")
+                print(f"[ROI] ROI preview saved: {preview_path}")
                 roi_preview_saved = True
 
             # ===== EVENTS + CAPTURE =====
@@ -408,77 +446,135 @@ def main(
                 visualizer.draw_status_text(frame, "SECURITY BREACH: Unauthorized Presence",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
                 capture(alert_system, frame, "VIOLATION_OVERCROWD",
-                        {"occupancy": len(state_machine.active_ids_in_zone)})
+                        {"occupancy": len(state_machine.active_ids_in_zone)}, check_type="Security")
 
             if should_process_frame and state_machine.session.get("improper_positioning"):
                 bad_id = state_machine.session["improper_positioning"]
                 bad_label = unlocker_labels.get(bad_id, "ignored detection")
                 visualizer.draw_status_text(frame, f"IMPROPER POSITIONING: {bad_label}",
                                             (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100))
-                capture(alert_system, frame, "IMPROPER_POSITIONING", {"person": bad_label})
+                capture(alert_system, frame, "IMPROPER_POSITIONING", {"person": bad_label}, check_type="Security")
 
-            if should_process_frame and is_door_open:
-                if not state_machine.session.get("door_open_captured"):
-                    if "door_opening_start_frame" not in state_machine.session or state_machine.session["door_opening_start_frame"] is None:
-                        state_machine.session["door_opening_start_frame"] = frame_idx
-                    
-                    # Calculate elapsed time
-                    elapsed_frames = frame_idx - state_machine.session["door_opening_start_frame"]
+            # ===== IST TIME & DAILY RESET =====
+            now_ist = datetime.now(IST)
+            today_str = now_ist.strftime("%Y-%m-%d")
+            if last_reset_date != today_str:
+                print(f"[SYSTEM] Midnight reset for {today_str} IST.")
+                morning_check_done = False
+                evening_check_done = False
+                last_reset_date = today_str
+            
+            curr_hour_min = now_ist.strftime("%H:%M")
+            is_morning_window = "09:30" <= curr_hour_min <= "10:30"
+            is_evening_window = "20:30" <= curr_hour_min <= "23:00"
+
+            # Detect Door Transition
+            door_transition = None
+            if last_door_state is not None and last_door_state != is_door_open:
+                if is_door_open:
+                    door_transition = "CLOSED_TO_OPEN"
+                else:
+                    door_transition = "OPEN_TO_CLOSED"
+            last_door_state = is_door_open
+
+            # ===== MORNING CHECK (CLOSED -> OPEN) =====
+            if is_morning_window and not morning_check_done:
+                if is_door_open:
+                    if not state_machine.session.get("door_open_captured"):
+                        if "door_opening_start_frame" not in state_machine.session or state_machine.session["door_opening_start_frame"] is None:
+                            state_machine.session["door_opening_start_frame"] = frame_idx
+                        
+                        elapsed_frames = frame_idx - state_machine.session["door_opening_start_frame"]
+                        elapsed_seconds = elapsed_frames / fps
+                        
+                        is_auth = auth_result["authorized"]
+                        
+                        if is_auth:
+                            capture(alert_system, frame, "DOOR_OPEN_AUTHORIZED_PRESENCE", {
+                                "authorized": True, "p1_id": state_machine.session.get("id_a"),
+                                "p2_id": state_machine.session.get("id_b"), "wait_time": f"{elapsed_seconds:.1f}s"
+                            }, check_type="Morning")
+                            state_machine.session["door_open_captured"] = True
+                            morning_check_done = True
+                            print(f"[MORNING] Authorized opening detected at {curr_hour_min} IST. Flagging done.")
+                        elif elapsed_seconds >= 5.0:
+                            capture(alert_system, frame, "DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
+                                "authorized": False, "p1_id": state_machine.session.get("id_a"),
+                                "p2_id": state_machine.session.get("id_b"), "wait_time": "5.0s Timeout"
+                            }, check_type="Morning")
+                            state_machine.session["door_open_captured"] = True
+                            morning_check_done = True
+                            print(f"[MORNING] UNAUTHORIZED opening at {curr_hour_min} IST (Grace expired). Flagging done.")
+                        else:
+                            wait_time_rem = 5.0 - elapsed_seconds
+                            visualizer.draw_status_text(frame, f"MORNING CHECK: WAITING FOR AUTH ({wait_time_rem:.1f}s)",
+                                                        (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                else:
+                    visualizer.draw_status_text(frame, "STATUS: MORNING WINDOW OPEN - WATCHING FOR OPENING",
+                                                (10, 130), color=(0, 165, 255))
+
+            # ===== EVENING CHECK (OPEN -> CLOSED) =====
+            elif is_evening_window and not evening_check_done:
+                if not is_door_open:
+                    # Door is now closed. We start the 5-sec grace period check.
+                    if "door_closing_start_frame" not in state_machine.session or state_machine.session["door_closing_start_frame"] is None:
+                        state_machine.session["door_closing_start_frame"] = frame_idx
+                        print(f"[EVENING] Door close detected at {curr_hour_min} IST. Waiting 5s for presence verify.")
+
+                    elapsed_frames = frame_idx - state_machine.session["door_closing_start_frame"]
                     elapsed_seconds = elapsed_frames / fps
-                    
                     is_auth = auth_result["authorized"]
-                    
-                    id_a = state_machine.session.get("id_a")
-                    id_b = state_machine.session.get("id_b")
-                    # Use stable assigned IDs, avoiding flickering keypoint checks
-                    unlockers_present = sum(1 for tid in [id_a, id_b] if tid is not None)
-                    
-                    # Condition 1: Auth becomes True ANY TIME within the 5 seconds
+
                     if is_auth:
-                        capture(alert_system, frame, "DOOR_OPEN_AUTHORIZED_PRESENCE", {
-                            "authorized": True,
-                            "p1_id": id_a,
-                            "p2_id": id_b,
-                            "unlockers_present": unlockers_present,
-                            "wait_time": f"{elapsed_seconds:.1f}s"
-                        })
-                        state_machine.session["door_open_captured"] = True
-                        print(f"\n[SYSTEM] Authorized within 5s grace period ({elapsed_seconds:.1f}s). Evidence saved. Exiting.")
-                        import sys
-                        sys.exit(0)
-                        
-                    # Condition 2: 5 seconds have elapsed and Auth is still False
+                        capture(alert_system, frame, "DOOR_CLOSE_AUTHORIZED_PRESENCE", {
+                            "authorized": True, "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"), "wait_time": f"{elapsed_seconds:.1f}s"
+                        }, check_type="Evening")
+                        evening_check_done = True
+                        print(f"[EVENING] Authorized closure at {curr_hour_min} IST. Flagging done.")
                     elif elapsed_seconds >= 5.0:
-                        capture(alert_system, frame, "DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
-                            "authorized": False,
-                            "p1_id": id_a,
-                            "p2_id": id_b,
-                            "unlockers_present": unlockers_present,
-                            "wait_time": "5.0s Timeout"
-                        })
-                        state_machine.session["door_open_captured"] = True
-                        print(f"\n[SYSTEM] 5s grace period expired without authorization (Unlockers: {unlockers_present}). UNAUTHORIZED evidence saved. Exiting.")
-                        import sys
-                        sys.exit(0)
-                        
-                    # Condition 3: Still waiting in the 5 second grace period
+                        capture(alert_system, frame, "DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
+                            "authorized": False, "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"), "wait_time": "5.0s Timeout"
+                        }, check_type="Evening")
+                        evening_check_done = True
+                        print(f"[EVENING] UNAUTHORIZED closure at {curr_hour_min} IST (Grace expired). Flagging done.")
                     else:
                         wait_time_rem = 5.0 - elapsed_seconds
-                        visualizer.draw_status_text(frame, f"DOOR OPEN: WAITING FOR AUTH ({wait_time_rem:.1f}s)",
+                        visualizer.draw_status_text(frame, f"EVENING CHECK: WAITING FOR AUTH ({wait_time_rem:.1f}s)",
                                                     (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
-            elif should_process_frame and not is_door_open:
+                else:
+                    visualizer.draw_status_text(frame, "STATUS: EVENING WINDOW OPEN - WATCHING FOR CLOSURE",
+                                                (10, 130), color=(0, 165, 255))
+            
+            else:
+                # Idle state
+                status_msg = "STATUS: SYSTEM IDLE (OUTSIDE WINDOWS)"
+                if not is_morning_window and not is_evening_window:
+                    status_msg = f"STATUS: IDLE | NEXT WINDOW: {'MORNING' if curr_hour_min < '09:30' else 'EVENING'}"
+                elif morning_check_done and is_morning_window:
+                    status_msg = "STATUS: MORNING CHECK COMPLETE"
+                elif evening_check_done and is_evening_window:
+                    status_msg = "STATUS: EVENING CHECK COMPLETE"
+
+                visualizer.draw_status_text(frame, status_msg, (10, 130), color=(200, 200, 200))
+
+            # Reset opening state machine flag if door closes normally outside of windows
+            if not is_door_open:
                 state_machine.session["door_open_captured"] = False
                 state_machine.session["door_opening_start_frame"] = None
+            else:
+                # Reset closing flag if door opens
+                state_machine.session["door_closing_start_frame"] = None
 
             if should_process_frame and auth_result["authorized"] and not state_machine.session.get("auth_success_logged"):
-                capture(alert_system, frame, "DUAL_AUTH_SUCCESS", {
-                    "person_a": "P1",
-                    "person_b": "P2",
-                    "timer_a_s": state_machine.session["timer_a_seconds"],
-                    "timer_b_s": state_machine.session["timer_b_seconds"],
-                    "sequence_state": state_machine.session["sequence_state"],
+                # Global auth success logging (non-screenshot)
+                alert_system.log_event("DUAL_AUTH_SUCCESS", {
+                    "p1_id": state_machine.session.get("id_a"),
+                    "p2_id": state_machine.session.get("id_b")
                 })
                 state_machine.session["auth_success_logged"] = True
+                print("[SYSTEM] Dual person authorization confirmed.")
 
             # ===== DEBUG FRAME: save annotated frame when first unlocker is detected =====
             if should_process_frame and not debug_frame_saved and len(state_machine.active_ids_in_zone) >= 1:
@@ -556,8 +652,9 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Two-Man Rule monitoring with live ROI overlay.")
-    parser.add_argument("video_source", nargs="?", default=0, help="Video file path or webcam index.")
-    parser.add_argument("--no-show", action="store_true", help="Disable live OpenCV preview window.")
+    default_url = config.RTSP_URLS[0]["rtsp_url"]
+    parser.add_argument("video_source", nargs="?", default=default_url, help="Video file path, RTSP stream, or webcam index.")
+    parser.add_argument("--show", action="store_true", help="Enable live OpenCV preview window.")
     parser.add_argument(
         "--scale-rois",
         action="store_true",
@@ -590,7 +687,7 @@ if __name__ == "__main__":
     video_source = int(args.video_source) if str(args.video_source).isdigit() else args.video_source
     main(
         video_source,
-        show_live=not args.no_show,
+        show_live=args.show,
         scale_rois=args.scale_rois,
         process_every=args.process_every,
         device=args.device,

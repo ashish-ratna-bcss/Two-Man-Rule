@@ -85,6 +85,16 @@ TRACK_THRESH = 0.5
 YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 CLOSED_DOOR_REFERENCE = "closed_ref.jpg"
 
+# ============ CAMERA & ORCHESTRATION CONFIG ============
+RTSP_URLS = [{
+    "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8001/Streaming/Channels/4001",
+    "camera_id": "GF-1-CAM-40",
+    "site_id": "1",
+    "site_name": "somajiguda"
+}]
+
+BASE_OUTPUT_DIR = "StrongRoomCheck"
+
 def create_session():
     """Create a fresh session state dict."""
     return {
