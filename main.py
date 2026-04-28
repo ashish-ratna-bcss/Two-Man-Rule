@@ -368,8 +368,12 @@ def main(
                 pct = min((state_machine.session["timer_b_seconds"] / config.MIN_UNLOCK_SECONDS) * 100, 100)
                 visualizer.draw_circular_progress_bar(frame, tuple(map(int, lock_b_center)), pct)
 
-            # Status overlay
-            n = len(state_machine.active_ids_in_zone)
+            # Stable Unlockers Count based on assigned sessions
+            n = 0
+            if state_machine.session.get("candidate_a") is not None or state_machine.session.get("id_a") is not None:
+                n += 1
+            if state_machine.session.get("candidate_b") is not None or state_machine.session.get("id_b") is not None:
+                n += 1
             visualizer.draw_status_text(
                 frame,
                 f"Unlockers: {n} | State: {state_machine.session['sequence_state']} | Auth: {auth_result['authorized']}",
@@ -414,56 +418,57 @@ def main(
                 capture(alert_system, frame, "IMPROPER_POSITIONING", {"person": bad_label})
 
             if should_process_frame and is_door_open:
-                # 1. Gather status of the 2 unlockers
-                id_a = state_machine.session.get("id_a")
-                id_b = state_machine.session.get("id_b")
-                
-                # Check head positions for both IDs
-                heads_in_zone = True
-                for slot, tid in [("P1", id_a), ("P2", id_b)]:
-                    if tid is None or tid not in tracked_persons:
-                        heads_in_zone = False
-                        break
+                if not state_machine.session.get("door_open_captured"):
+                    if "door_opening_start_frame" not in state_machine.session or state_machine.session["door_opening_start_frame"] is None:
+                        state_machine.session["door_opening_start_frame"] = frame_idx
                     
-                    person = tracked_persons[tid]
-                    # Direct check for head keypoint (index 0) in interaction zone
-                    kpts = person.get("keypoints")
-                    if kpts is None or len(kpts) == 0:
-                        heads_in_zone = False
-                        break
+                    # Calculate elapsed time
+                    elapsed_frames = frame_idx - state_machine.session["door_opening_start_frame"]
+                    elapsed_seconds = elapsed_frames / fps
+                    
+                    is_auth = auth_result["authorized"]
+                    
+                    id_a = state_machine.session.get("id_a")
+                    id_b = state_machine.session.get("id_b")
+                    # Use stable assigned IDs, avoiding flickering keypoint checks
+                    unlockers_present = sum(1 for tid in [id_a, id_b] if tid is not None)
+                    
+                    # Condition 1: Auth becomes True ANY TIME within the 5 seconds
+                    if is_auth:
+                        capture(alert_system, frame, "DOOR_OPEN_AUTHORIZED_PRESENCE", {
+                            "authorized": True,
+                            "p1_id": id_a,
+                            "p2_id": id_b,
+                            "unlockers_present": unlockers_present,
+                            "wait_time": f"{elapsed_seconds:.1f}s"
+                        })
+                        state_machine.session["door_open_captured"] = True
+                        print(f"\n[SYSTEM] Authorized within 5s grace period ({elapsed_seconds:.1f}s). Evidence saved. Exiting.")
+                        import sys
+                        sys.exit(0)
                         
-                    hx, hy, hc = kpts[0]
-                    if hc < config.HEAD_CONFIDENCE_THRESHOLD or not roi_manager.point_in_roi("INTERACTION_ZONE", hx, hy):
-                        heads_in_zone = False
-                        break
-                
-                # 2. Check Auth and capture
-                if heads_in_zone:
-                    auth_status = "AUTHORIZED" if auth_result["authorized"] else "UNAUTHORIZED"
-                    event_name = f"DOOR_OPEN_{auth_status}_PRESENCE"
-                    
-                    # Only capture once per "door open" event to avoid flooding
-                    if not state_machine.session.get("door_open_captured"):
-                        capture(alert_system, frame, event_name, {
-                            "authorized": auth_result["authorized"],
+                    # Condition 2: 5 seconds have elapsed and Auth is still False
+                    elif elapsed_seconds >= 5.0:
+                        capture(alert_system, frame, "DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
+                            "authorized": False,
                             "p1_id": id_a,
                             "p2_id": id_b,
-                            "heads_verified": True
+                            "unlockers_present": unlockers_present,
+                            "wait_time": "5.0s Timeout"
                         })
                         state_machine.session["door_open_captured"] = True
-                else:
-                    # Door open but heads not verified in zone
-                    if not state_machine.session.get("door_open_captured"):
-                        capture(alert_system, frame, "DOOR_OPEN_UNKNOWN_PRESENCE", {
-                            "authorized": auth_result["authorized"],
-                            "p1_id": id_a,
-                            "p2_id": id_b,
-                            "heads_verified": False
-                        })
-                        state_machine.session["door_open_captured"] = True
-            else:
-                # Reset capture flag when door closes
+                        print(f"\n[SYSTEM] 5s grace period expired without authorization (Unlockers: {unlockers_present}). UNAUTHORIZED evidence saved. Exiting.")
+                        import sys
+                        sys.exit(0)
+                        
+                    # Condition 3: Still waiting in the 5 second grace period
+                    else:
+                        wait_time_rem = 5.0 - elapsed_seconds
+                        visualizer.draw_status_text(frame, f"DOOR OPEN: WAITING FOR AUTH ({wait_time_rem:.1f}s)",
+                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+            elif should_process_frame and not is_door_open:
                 state_machine.session["door_open_captured"] = False
+                state_machine.session["door_opening_start_frame"] = None
 
             if should_process_frame and auth_result["authorized"] and not state_machine.session.get("auth_success_logged"):
                 capture(alert_system, frame, "DUAL_AUTH_SUCCESS", {
