@@ -80,3 +80,12 @@ class ROIManager:
             points = roi["points"]
             return (points[:, 0].mean(), points[:, 1].mean())
         return None
+
+    def get_roi(self, name: str) -> Optional[np.ndarray]:
+        """Get polygon points array for ROI."""
+        if name not in self.rois:
+            return None
+        roi = self.rois[name]
+        if roi["type"] == "polygon":
+            return roi["points"]
+        return None
