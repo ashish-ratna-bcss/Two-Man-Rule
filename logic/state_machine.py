@@ -300,8 +300,13 @@ class DualAuthStateMachine:
 
     def _reset_all_timers(self):
         self.session.update(config.create_session())
+        self.active_ids_in_zone = set()
         self.slot_anchors = {"a": None, "b": None}
         self.verified_anchors = {"a": None, "b": None}
+        self.unlocker_tags = {}
+        self.all_unlocker_ids = {"P1_unlocker": set(), "P2_unlocker": set()}
+        self.body_fingerprints = {"a": None, "b": None}
+        self.last_seen_bbox = {"a": None, "b": None}
 
     def _validate_both_ids_in_interaction_zone(self, tracked_persons: Dict[int, Dict], pose_results: Dict[int, Dict]):
         """Verify both assigned persons have heads in INTERACTION_ZONE."""
@@ -853,6 +858,26 @@ class DualAuthStateMachine:
             "lock_b_authorized": lock_b_auth,
             "violation_type": None if authorized else "INCOMPLETE",
         }
+
+    def verified_unlockers_in_interaction_zone(self, tracked_persons: Dict[int, Dict]) -> bool:
+        """Return True only when verified P1 and P2 are both currently visible in INTERACTION_ZONE."""
+        for slot in ("a", "b"):
+            track_id = self.session.get(f"id_{slot}")
+            if track_id is None or track_id not in tracked_persons:
+                return False
+
+            keypoints = tracked_persons[track_id].get("keypoints")
+            if keypoints is None:
+                return False
+
+            head_pos = self._get_head_position(keypoints)
+            if head_pos is None:
+                return False
+
+            if not self.roi_manager.point_in_roi("INTERACTION_ZONE", head_pos[0], head_pos[1]):
+                return False
+
+        return True
 
     def check_door_violation(self) -> Optional[str]:
         if self.authorized_session_buffer is None:
