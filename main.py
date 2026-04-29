@@ -297,8 +297,11 @@ def main(
         active_rois = setup_rois(roi_manager, width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
         try:
-            door_verifier = DoorVerifier(config.CLOSED_DOOR_REFERENCE)
-            print("[SYSTEM] Door verifier loaded.")
+            door_verifier = DoorVerifier(
+                config.CLOSED_DOOR_REFERENCE,
+                similarity_threshold=config.SSIM_THRESHOLD
+            )
+            print(f"[SYSTEM] Door verifier loaded with threshold {config.SSIM_THRESHOLD}")
         except FileNotFoundError as e:
             print(f"[WARNING] {e}")
             door_verifier = None

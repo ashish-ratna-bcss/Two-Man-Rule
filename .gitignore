@@ -18,6 +18,11 @@ cactches/
 *.h5
 *.onnx
 
+# Image Files
+*.png
+*.jpg
+*.jpeg
+
 # Environment and IDE
 .venv/
 venv/

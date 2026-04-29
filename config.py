@@ -46,7 +46,7 @@ LOCK_B_ROI = np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450
 DOOR_ROI = np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32)
 
 DOOR_CORNER_ROI = np.array([
-    [556, 53], [612, 30], [621, 53], [567, 72]
+    [557, 53], [563, 81], [677, 83], [656, 8]
 ], np.int32)
 
 # Reference BGR color for the door corner (from closed_ref.jpg)

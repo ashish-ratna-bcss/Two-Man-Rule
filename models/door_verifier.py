@@ -25,9 +25,11 @@ class DoorVerifier:
         # Extract and store reference patch (grayscale)
         ref_crop = reference[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
         self.reference_patch = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
+        self.reference_mean = np.mean(self.reference_patch)
 
         # Thresholds
         self.similarity_threshold = similarity_threshold
+        self.intensity_threshold = 25  # Meaningful brightness shift
         self.debounce_threshold = debounce_threshold
 
         # Debounce state
@@ -57,11 +59,21 @@ class DoorVerifier:
                     (self.reference_patch.shape[1], self.reference_patch.shape[0])
                 )
 
+            # Mean intensity check
+            curr_mean = np.mean(curr_patch)
+            intensity_diff = abs(curr_mean - self.reference_mean)
+
             # SSIM comparison
             self.last_ssim = float(ssim(self.reference_patch, curr_patch, full=False))
+            self.last_ssim = max(0.0, min(1.0, self.last_ssim))
 
-            # LOW similarity = corner gone = door OPEN
-            raw_is_open = self.last_ssim < self.similarity_threshold
+            # Door is OPEN if:
+            # 1. Texture has deviated (SSIM low)
+            # 2. OR Brightness has shifted significantly (even if texture looks similar)
+            texture_open = self.last_ssim < self.similarity_threshold
+            intensity_open = intensity_diff > self.intensity_threshold
+            
+            raw_is_open = texture_open or intensity_open
 
             # Debounce
             if raw_is_open == self.candidate_state:
@@ -74,7 +86,7 @@ class DoorVerifier:
             self._frame_tick += 1
             if self._frame_tick % 30 == 0:
                 print(
-                    f"[DOOR] SSIM: {self.last_ssim:.3f} | "
+                    f"[DOOR] SSIM: {self.last_ssim:.3f} | Mean Diff: {intensity_diff:.1f} | "
                     f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'} | "
                     f"Debounce: {self.consecutive_frames_agreed}/{self.debounce_threshold} "
                     f"-> {'OPEN' if self.candidate_state else 'CLOSED'}"
@@ -86,10 +98,9 @@ class DoorVerifier:
                     print(
                         f"[DOOR] *** State Flip: "
                         f"{'CLOSED -> OPEN' if self.candidate_state else 'OPEN -> CLOSED'} "
-                        f"(SSIM={self.last_ssim:.3f}) ***"
+                        f"(SSIM={self.last_ssim:.3f}, IntDiff={intensity_diff:.1f}) ***"
                     )
                     self.stable_is_open = self.candidate_state
-                # Cap to prevent overflow
                 self.consecutive_frames_agreed = self.debounce_threshold
 
             return self.stable_is_open
