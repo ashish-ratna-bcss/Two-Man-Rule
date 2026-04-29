@@ -11,7 +11,7 @@ class DoorVerifier:
         self,
         reference_image_path: str,
         similarity_threshold: float = 0.75,
-        debounce_threshold: int = 8
+        debounce_threshold: int = 10
     ):
         # Load reference image
         reference = cv2.imread(reference_image_path)
@@ -111,3 +111,6 @@ class DoorVerifier:
 
     def get_last_ssim(self) -> Optional[float]:
         return self.last_ssim
+
+    def is_transition_pending(self) -> bool:
+        return self.candidate_state != self.stable_is_open

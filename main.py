@@ -340,6 +340,8 @@ def main(
         last_door_state = None  # To detect transitions
         is_door_open = False
         ssim_val = None
+        door_transition_pending = False
+        tracking_active = False
         live_window_available = can_show_live_window(show_live)
         if live_window_available:
             cv2.namedWindow("Two-Man Rule Live ROI Debug", cv2.WINDOW_NORMAL)
@@ -353,6 +355,23 @@ def main(
 
             frame_idx += 1
 
+            # ===== IST TIME & DAILY RESET =====
+            now_ist = datetime.now(IST)
+            today_str = now_ist.strftime("%Y-%m-%d")
+            if last_reset_date != today_str:
+                print(f"[SYSTEM] Midnight reset for {today_str} IST.")
+                morning_check_done = False
+                evening_check_done = False
+                last_reset_date = today_str
+
+            curr_hour_min = now_ist.strftime("%H:%M")
+            is_morning_window = "09:30" <= curr_hour_min <= "10:30"
+            is_evening_window = "20:30" <= curr_hour_min <= "23:00"
+            tracking_active = (
+                (is_morning_window and not morning_check_done)
+                or (is_evening_window and not evening_check_done)
+            )
+
             # ===== PIPELINE =====
             should_process_frame = frame_idx == 1 or (frame_idx - last_processed_frame_idx) >= process_every
             if should_process_frame:
@@ -360,17 +379,32 @@ def main(
                 last_processed_frame_idx = frame_idx
 
                 t0 = time.perf_counter()
-                detections = detector.detect(frame)
-                tracked_persons = tracker.update(detections)
-                occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
-                state_machine.update_timers(tracked_persons, frame_step=frame_step)
-                auth_result = state_machine.check_authorization()
+                if tracking_active:
+                    detections = detector.detect(frame)
+                    tracked_persons = tracker.update(detections)
+                    occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
+                    state_machine.update_timers(tracked_persons, frame_step=frame_step)
+                    auth_result = state_machine.check_authorization()
+                else:
+                    tracked_persons = {}
+                    state_machine.active_ids_in_zone = set()
+                    state_machine.session["improper_positioning"] = None
+                    occupancy_status = "OK"
+                    auth_result = {
+                        "authorized": False,
+                        "lock_a_authorized": False,
+                        "lock_b_authorized": False,
+                        "violation_type": "INCOMPLETE",
+                    }
 
                 is_door_open = False
                 ssim_val = None
                 if door_verifier:
                     is_door_open = door_verifier.verify(frame)
                     ssim_val = door_verifier.get_last_ssim()
+                    door_transition_pending = door_verifier.is_transition_pending()
+                else:
+                    door_transition_pending = False
                 inference_ms = (time.perf_counter() - t0) * 1000.0
 
             # ===== VISUALIZATION =====
@@ -410,27 +444,34 @@ def main(
 
             # Stable Unlockers Count based on assigned sessions
             n = 0
-            if state_machine.session.get("candidate_a") is not None or state_machine.session.get("id_a") is not None:
-                n += 1
-            if state_machine.session.get("candidate_b") is not None or state_machine.session.get("id_b") is not None:
-                n += 1
+            if tracking_active:
+                if state_machine.session.get("candidate_a") is not None or state_machine.session.get("id_a") is not None:
+                    n += 1
+                if state_machine.session.get("candidate_b") is not None or state_machine.session.get("id_b") is not None:
+                    n += 1
+            auth_status_text = auth_result["authorized"] if tracking_active else "OFF"
+            state_status_text = state_machine.session["sequence_state"] if tracking_active else "IDLE_OUTSIDE_AUDIT"
             visualizer.draw_status_text(
                 frame,
-                f"Unlockers: {n} | State: {state_machine.session['sequence_state']} | Auth: {auth_result['authorized']}",
+                f"Unlockers: {n} | State: {state_status_text} | Auth: {auth_status_text}",
                 (10, 30)
             )
             if should_process_frame:
+                ai_status = f"AI: {inference_ms:.0f}ms | Every {process_every} frame(s) | IDs only for unlockers"
+                if not tracking_active:
+                    ai_status = "AI tracking: OFF outside audit window"
                 visualizer.draw_status_text(
                     frame,
-                    f"AI: {inference_ms:.0f}ms | Every {process_every} frame(s) | IDs only for unlockers",
+                    ai_status,
                     (10, 55)
                 )
+            door_status_label = "--" if door_transition_pending else ("OPEN" if is_door_open else "CLOSED")
             if ssim_val is not None:
-                visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {'OPEN' if is_door_open else 'CLOSED'}", (10, 80))
+                visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {door_status_label}", (10, 80))
 
             # Prominent Top-Right Corner Door Status
-            door_status_text = f"DOOR: {'OPEN' if is_door_open else 'CLOSED'}"
-            door_color = (0, 0, 255) if is_door_open else (0, 255, 0) # Red if open, Green if closed
+            door_status_text = f"DOOR: {door_status_label}"
+            door_color = (200, 200, 200) if door_transition_pending else ((0, 0, 255) if is_door_open else (0, 255, 0))
             # Use larger font for the corner status
             cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, cv2.LINE_AA) # shadow
@@ -445,31 +486,18 @@ def main(
                 roi_preview_saved = True
 
             # ===== EVENTS + CAPTURE =====
-            if should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
+            if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: Unauthorized Presence",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
                 capture(alert_system, frame, "VIOLATION_OVERCROWD",
                         {"occupancy": len(state_machine.active_ids_in_zone)}, check_type="Security")
 
-            if should_process_frame and state_machine.session.get("improper_positioning"):
+            if tracking_active and should_process_frame and state_machine.session.get("improper_positioning"):
                 bad_id = state_machine.session["improper_positioning"]
                 bad_label = unlocker_labels.get(bad_id, "ignored detection")
                 visualizer.draw_status_text(frame, f"IMPROPER POSITIONING: {bad_label}",
                                             (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100))
                 capture(alert_system, frame, "IMPROPER_POSITIONING", {"person": bad_label}, check_type="Security")
-
-            # ===== IST TIME & DAILY RESET =====
-            now_ist = datetime.now(IST)
-            today_str = now_ist.strftime("%Y-%m-%d")
-            if last_reset_date != today_str:
-                print(f"[SYSTEM] Midnight reset for {today_str} IST.")
-                morning_check_done = False
-                evening_check_done = False
-                last_reset_date = today_str
-            
-            curr_hour_min = now_ist.strftime("%H:%M")
-            is_morning_window = "09:30" <= curr_hour_min <= "10:30"
-            is_evening_window = "20:30" <= curr_hour_min <= "23:00"
 
             # Detect Door Transition
             door_transition = None
@@ -570,7 +598,7 @@ def main(
                 # Reset closing flag if door opens
                 state_machine.session["door_closing_start_frame"] = None
 
-            if should_process_frame and auth_result["authorized"] and not state_machine.session.get("auth_success_logged"):
+            if tracking_active and should_process_frame and auth_result["authorized"] and not state_machine.session.get("auth_success_logged"):
                 # Global auth success logging (non-screenshot)
                 alert_system.log_event("DUAL_AUTH_SUCCESS", {
                     "p1_id": state_machine.session.get("id_a"),
@@ -580,7 +608,7 @@ def main(
                 print("[SYSTEM] Dual person authorization confirmed.")
 
             # ===== DEBUG FRAME: save annotated frame when first unlocker is detected =====
-            if should_process_frame and not debug_frame_saved and len(state_machine.active_ids_in_zone) >= 1:
+            if tracking_active and should_process_frame and not debug_frame_saved and len(state_machine.active_ids_in_zone) >= 1:
                 debug_frame = frame.copy()
                 # Draw all keypoints for all tracked persons
                 for track_id, person in tracked_persons.items():
@@ -622,7 +650,7 @@ def main(
                 debug_frame_saved = True
 
             # ===== PROGRESS LOG =====
-            if frame_idx % 30 == 0:
+            if tracking_active and frame_idx % 30 == 0:
                 timers = (f"P1:{state_machine.session['timer_a_seconds']:.1f}s "
                           f"P2:{state_machine.session['timer_b_seconds']:.1f}s")
                 cand_a = f"ID {state_machine.session['candidate_a']}" if state_machine.session["candidate_a"] is not None else "-"
