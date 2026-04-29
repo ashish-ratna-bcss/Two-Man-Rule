@@ -5,7 +5,6 @@ import numpy as np
 
 import config
 from logic.roi_manager import ROIManager
-from logic.person_memory import PersonMemory
 
 
 HEAD_KEYPOINTS = (0, 1, 2, 3, 4)
