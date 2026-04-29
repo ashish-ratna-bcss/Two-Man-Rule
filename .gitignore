@@ -31,6 +31,10 @@ env/
 .vscode/
 .idea/
 .claude/
+/.codex
+
+# Local Codex/Superpowers specs
+/docs/superpowers/specs/
 
 # OS specific
 .DS_Store
