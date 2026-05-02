@@ -4,6 +4,7 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
+MORNING_POST_OPEN_AUTH_SECONDS = 5.0  # After door opens, wait up to 5s for 2 authenticated persons
 
 # ============ TIMERS (in seconds) ============
 # One valid key-turn/unlock interaction must last at least 6s and no more than 10s.
@@ -47,7 +48,7 @@ LOCK_B_ROI = np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450
 DOOR_ROI = np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32)
 
 DOOR_CORNER_ROI = np.array([
-    [557, 53], [563, 81], [677, 83], [656, 8]
+    [640.30, 13.22], [659.51, 73.73], [845.86, 9.38]
 ], np.int32)
 
 # Reference BGR color for the door corner (from closed_ref.jpg)
@@ -94,7 +95,7 @@ RTSP_URLS = [{
     "site_name": "somajiguda"
 }]
 
-BASE_OUTPUT_DIR = "StrongRoomCheck"
+BASE_OUTPUT_DIR = "strong_room_opening"
 
 def create_session():
     """Create a fresh session state dict."""

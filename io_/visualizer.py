@@ -137,6 +137,63 @@ class Visualizer:
 
         return frame
 
+    def draw_client_overlays(
+        self,
+        frame: np.ndarray,
+        unlocker_labels: dict,
+        tracked_persons: dict,
+        auth_result: dict,
+        is_door_open: bool,
+        color_unlocking: Tuple[int, int, int] = None,
+        color_authorized: Tuple[int, int, int] = None,
+        persons_auth_status=None,
+    ) -> np.ndarray:
+        """Draw client-facing overlays: unlocker bboxes + 2 status panels only.
+
+        persons_auth_status: None = blank (no transaction yet), True = Available, False = Unavailable
+        """
+        import config as _cfg
+        col_auth = color_authorized or _cfg.COLOR_AUTHORIZED
+        col_unlock = color_unlocking or _cfg.COLOR_UNLOCKING
+
+        # Unlocker bounding boxes
+        for track_id, label in unlocker_labels.items():
+            person = tracked_persons.get(track_id)
+            if person is None:
+                continue
+            bbox = person.get("bbox")
+            if bbox is None:
+                continue
+            color = col_auth if auth_result.get("authorized") else col_unlock
+            self.draw_bounding_box(frame, bbox, color, label)
+
+        h, w = frame.shape[:2]
+        panel_h = 50
+        font = cv2.FONT_HERSHEY_SIMPLEX
+
+        # --- 2 Persons panel (top-left) ---
+        # Blank until door transaction completes and auth is evaluated
+        panel_w = 380
+        cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), (20, 20, 20), -1)
+        if persons_auth_status is None:
+            cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), (80, 80, 80), 2)
+            cv2.putText(frame, "2 Persons: --", (20, 10 + panel_h - 13), font, 0.8, (150, 150, 150), 2, cv2.LINE_AA)
+        else:
+            persons_color = (0, 200, 0) if persons_auth_status else (0, 0, 220)
+            persons_text = "2 Persons: Available" if persons_auth_status else "2 Persons: Unavailable"
+            cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), persons_color, 2)
+            cv2.putText(frame, persons_text, (20, 10 + panel_h - 13), font, 0.8, persons_color, 2, cv2.LINE_AA)
+
+        # --- Door Status panel (top-right) ---
+        door_text = "Door: Open" if is_door_open else "Door: Closed"
+        door_color = (0, 0, 220) if is_door_open else (0, 200, 0)
+        dp_w = 260
+        cv2.rectangle(frame, (w - dp_w - 10, 10), (w - 10, 10 + panel_h), (20, 20, 20), -1)
+        cv2.rectangle(frame, (w - dp_w - 10, 10), (w - 10, 10 + panel_h), door_color, 2)
+        cv2.putText(frame, door_text, (w - dp_w, 10 + panel_h - 13), font, 0.8, door_color, 2, cv2.LINE_AA)
+
+        return frame
+
     def draw_roi_polygon(
         self,
         frame: np.ndarray,

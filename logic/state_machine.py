@@ -142,7 +142,7 @@ class DualAuthStateMachine:
             candidate_id = self.session.get(f"candidate_{slot}")
             timer = self.session.get(f"timer_{slot}_frames", 0)
 
-            # Assigned person: id_a/id_b are FIXED after assignment — never changed here.
+                # Assigned person: id_a/id_b are FIXED after assignment — never changed here.
             # Visualization layer handles display remapping via crop-reid independently.
             if assigned_id is not None:
                 if assigned_id in pose_results:
