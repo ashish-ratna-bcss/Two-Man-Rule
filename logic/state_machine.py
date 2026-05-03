@@ -174,6 +174,26 @@ class DualAuthStateMachine:
         self.active_ids_in_zone = interacting_ids
         self._update_improper_positioning(pose_results)
 
+        # Catch if P1 (id_a) leaves and comes back to interact with the door again
+        id_a = self.session.get("id_a")
+        if id_a is not None and self.session.get("id_b") is None:
+            if "id_a_left_zone" not in self.session:
+                self.session["id_a_left_zone"] = False
+                
+            if id_a in pose_results:
+                res = pose_results[id_a]
+                in_zone = res.get("head_in_interaction", False) or res.get("feet_in_standing", False)
+                if not in_zone:
+                    self.session["id_a_left_zone"] = True
+                    
+                if self.session["id_a_left_zone"]:
+                    # If they came back and are trying to interact with the locks again
+                    if res.get("head_in_interaction") and res.get("feet_in_standing") and res.get("has_lock_contact"):
+                        print(f"[VIOLATION] P1 (ID {id_a}) left and returned to interact instead of P2!")
+                        self.session["violation_type"] = "SAME_ID"
+            else:
+                self.session["id_a_left_zone"] = True
+
         if self.session["id_a"] is None:
             self._update_unlock_slot("a", interacting_ids, pose_results, frame_step=frame_step)
         elif self.session["id_b"] is None:
@@ -832,15 +852,11 @@ class DualAuthStateMachine:
         lock_a_auth = id_a is not None and self.session["timer_a_frames"] >= self.min_unlock_frames
         lock_b_auth = id_b is not None and self.session["timer_b_frames"] >= self.min_unlock_frames
 
-        if id_a is not None and id_b is not None and id_a == id_b:
-            return {
-                "authorized": False,
-                "lock_a_authorized": lock_a_auth,
-                "lock_b_authorized": lock_b_auth,
-                "violation_type": "SAME_ID",
-            }
-
         authorized = lock_a_auth and lock_b_auth and id_a != id_b
+
+        violation = self.session.get("violation_type")
+        if not authorized and violation is None:
+            violation = "INCOMPLETE"
 
         if authorized and self.authorized_session_buffer is None:
             self.authorized_session_buffer = {
@@ -856,7 +872,7 @@ class DualAuthStateMachine:
             "authorized": authorized,
             "lock_a_authorized": lock_a_auth,
             "lock_b_authorized": lock_b_auth,
-            "violation_type": None if authorized else "INCOMPLETE",
+            "violation_type": None if authorized else violation,
         }
 
     def verified_unlockers_in_interaction_zone(self, tracked_persons: Dict[int, Dict]) -> bool:

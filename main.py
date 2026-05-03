@@ -583,6 +583,24 @@ def main(
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
                 _capture("VIOLATION_OVERCROWD", {"occupancy": len(state_machine.active_ids_in_zone)}, "Security")
 
+            if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
+                visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
+                                            (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
+                _capture("VIOLATION_SAME_PERSON", {"reason": "same_person_tried_both_slots"}, "Security")
+                
+                if current_auth_window == "evening":
+                    persons_auth_status = False
+                    evening_check_done = True
+                    evening_auth_started = False
+                    print(f"[EVENING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
+                elif current_auth_window == "morning":
+                    persons_auth_status = False
+                    morning_check_done = True
+                    morning_post_open_started = False
+                    print(f"[MORNING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
+                
+                state_machine.session["violation_type"] = None
+
             if tracking_active and should_process_frame and state_machine.session.get("improper_positioning"):
                 bad_id = state_machine.session["improper_positioning"]
                 bad_label = unlocker_labels.get(bad_id, "ignored detection")
