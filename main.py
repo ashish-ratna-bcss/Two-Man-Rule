@@ -581,7 +581,8 @@ def main(
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: Unauthorized Presence",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                _capture("VIOLATION_OVERCROWD", {"occupancy": len(state_machine.active_ids_in_zone)}, "Security")
+                # Intermediary screenshot disabled to ensure 1 screenshot per window
+                # _capture("VIOLATION_OVERCROWD", {"occupancy": len(state_machine.active_ids_in_zone)}, "Security")
 
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
@@ -606,7 +607,8 @@ def main(
                 bad_label = unlocker_labels.get(bad_id, "ignored detection")
                 visualizer.draw_status_text(frame, f"IMPROPER POSITIONING: {bad_label}",
                                             (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100))
-                _capture("IMPROPER_POSITIONING", {"person": bad_label}, "Security")
+                # Intermediary screenshot disabled to ensure 1 screenshot per window
+                # _capture("IMPROPER_POSITIONING", {"person": bad_label}, "Security")
 
             # Detect Door Transition
             door_transition = None
