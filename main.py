@@ -476,7 +476,11 @@ def main(
                 is_door_open = False
                 ssim_val = None
                 if door_verifier:
-                    is_door_open = door_verifier.verify(frame)
+                    if state_machine.should_check_door_state():
+                        is_door_open = door_verifier.verify(frame)
+                    else:
+                        is_door_open = last_door_state if last_door_state is not None else False
+                        
                     ssim_val = door_verifier.get_last_ssim()
                     door_transition_pending = door_verifier.is_transition_pending()
                 else:

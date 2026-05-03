@@ -73,7 +73,11 @@ class DoorVerifier:
             texture_open = self.last_ssim < self.similarity_threshold
             intensity_open = intensity_diff > self.intensity_threshold
             
-            raw_is_open = texture_open or intensity_open
+            # LIGHT CHECK: If it is extremely dark (lights off), do NOT trigger false open
+            if curr_mean < 20.0:
+                raw_is_open = False
+            else:
+                raw_is_open = texture_open or intensity_open
 
             # Debounce
             if raw_is_open == self.candidate_state:
