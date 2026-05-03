@@ -487,7 +487,10 @@ def main(
             draw_rois(visualizer, frame, active_rois)
 
             unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
-            visible_pose_ids = set(unlocker_labels)
+            if debug:
+                visible_pose_ids = set(tracked_persons.keys())
+            else:
+                visible_pose_ids = set(unlocker_labels)
 
             # Draw only locker-door interaction IDs by default. Raw detections can be
             # enabled for calibration with --show-all-detections or --debug.
@@ -496,7 +499,7 @@ def main(
                 if track_id in unlocker_labels:
                     label = unlocker_labels[track_id]
                 elif _show_all:
-                    label = ""
+                    label = f"ID {track_id}"
                 else:
                     continue
 
