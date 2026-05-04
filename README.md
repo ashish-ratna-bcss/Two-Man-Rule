@@ -19,8 +19,8 @@ The pipeline integrates pose detection, multi-sensor tracking, and state-machine
 
 | Module | Responsibility |
 |--------|-----------------|
-| `config.py` | Camera metadata, ROI polygons, and security thresholds. |
-| `main.py` | Master Orchestrator, IST Scheduling, and Capture logic. |
+| `config.py` | Stream metadata (`STREAMS_CONFIG`), ROI polygons, reference paths, and thresholds. |
+| `main.py` | Master Orchestrator, Stream Selection, IST Scheduling, and Capture logic. |
 | `models/door_verifier.py` | SSIM-based patch comparison for door corner state. |
 | `logic/state_machine.py` | Dual-auth sequence management and lock interaction timers. |
 | `models/pose_detector.py` | Skeleton tracking using YOLO Pose models. |
@@ -35,9 +35,13 @@ pip install -r requirements.txt
 ## Usage
 
 ### 1. Production Run (Headless, Daemon)
-Reads live RTSP stream, runs forever, resets daily at midnight IST:
+Reads live RTSP stream for a specific configuration, runs forever, resets daily at midnight IST:
 ```bash
+# Run the first stream (default)
 python3 main.py
+
+# Run the second stream defined in config.py
+python3 main.py --stream-index 1
 ```
 **Behaviour:**
 - **Morning window 09:30–10:30 IST**: Tracks 2 unlockers, waits for door CLOSED→OPEN transition
@@ -54,20 +58,23 @@ python3 main.py
 ### 2. Test Window — Morning
 Forces morning window logic regardless of current IST time. Exits automatically after check criteria met and screenshot saved:
 ```bash
+# Test using Stream 0's ROIs
 python3 main.py 28-E.mp4 --test-window morning --show
+
+# Test using Stream 1's ROIs
+python3 main.py 28-E.mp4 --stream-index 1 --test-window morning --show
 ```
 
 ### 3. Test Window — Evening
 Forces evening window logic. Exits automatically after check complete:
 ```bash
-python3 main.py 28-E.mp4 --test-window evening --show
+python3 main.py 28-E.mp4 --stream-index 0 --test-window evening --show
 ```
 
 ### 4. Test Window — Debug Mode
 All overlays visible on screen (ROI polygons, SSIM, AI ms, progress bars, pose keypoints, all detections). Screenshots remain clean regardless:
 ```bash
-python3 main.py 28-E.mp4 --test-window morning --show --debug
-python3 main.py 28-E.mp4 --test-window evening --show --debug
+python3 main.py 28-E.mp4 --stream-index 0 --test-window morning --show --debug
 ```
 
 ### 5. Performance Tuning
@@ -99,6 +106,8 @@ Every captured screenshot contains only:
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `video_source` | config | (Positional) Override video path/URL for the stream. |
+| `--stream-index N` | 0 | Index of the stream configuration to use from `config.STREAMS_CONFIG`. |
 | `--show` | off | Enable live OpenCV preview window |
 | `--debug` | off | Show all debug overlays on live window. Screenshots always clean |
 | `--test-window morning\|evening` | off | Force auth window regardless of IST time. Exits after check complete |
@@ -110,23 +119,22 @@ Every captured screenshot contains only:
 
 ## Evidence Output Structure
 
-Forensic screenshots are stored in the root `StrongRoomCheck` directory:
+Forensic screenshots are stored dynamically based on the stream's store and camera configuration:
 ```text
-StrongRoomCheck/
-├── ROI_PREVIEW_GF-1-CAM-40.jpg (Current ROI configuration)
-└── 2026-04-28/
-    ├── MorningCheck/
-    │   └── StrongRoomCheck_Morning_GF-1-CAM-40_20260428_093512_456.png
-    └── EveningCheck/
-        └── StrongRoomCheck_Evening_GF-1-CAM-40_224510_123.png
+strong_room_opening/
+└── somajiguda/
+    └── GF-1-CAM-40/
+        ├── ROI_PREVIEW_GF-1-CAM-40.jpg
+        └── 28-04-2026/
+            ├── alert_1_GF-1-CAM-40_28-04-2026_09-35-12.png
+            └── alert_2_GF-1-CAM-40_28-04-2026_22-45-10.png
 ```
 
 ## Configuration
 
 Update `config.py` to adjust:
-- **RTSP_URLS**: Site metadata and camera stream links.
+- **STREAMS_CONFIG**: List of isolated dictionaries for each store/floor. Defines `rtsp_url`, specific `rois`, and the `closed_door_reference` image path.
 - **Time Windows**: Adjust the morning/evening schedule.
-- **ROIs**: Redefine lock coordinates and standing zones.
 - **SSIM_THRESHOLD**: Fine-tune door state sensitivity (default is 0.92).
 
 ---

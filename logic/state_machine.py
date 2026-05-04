@@ -453,9 +453,9 @@ class DualAuthStateMachine:
         result["left_right_order"] = self._left_right_keypoints_in_video_order(keypoints)
         result["has_lock_contact"] = result["contact_a"] or result["contact_b"]
 
+        # feet_in_standing is OPTIONAL — standing zone may be occluded by objects
         result["qualified"] = (
             result["head_in_interaction"]
-            and result["feet_in_standing"]
             and result["waist_near_door"]
             and result["contact_a"]
             and result["contact_b"]
@@ -466,13 +466,12 @@ class DualAuthStateMachine:
         )
 
         if result["qualified"]:
-            print("[POSE] Qualified: all conditions pass")
+            optional_note = "" if result["feet_in_standing"] else " (optional feet_in_standing skipped)"
+            print(f"[POSE] Qualified: all mandatory conditions pass{optional_note}")
         else:
             failed = []
             if not result["head_in_interaction"]:
                 failed.append("head_not_in_interaction")
-            if not result["feet_in_standing"]:
-                failed.append("feet_not_in_standing")
             if not result["waist_near_door"]:
                 failed.append("waist_not_near_door")
             if not result["contact_a"]:
@@ -487,7 +486,12 @@ class DualAuthStateMachine:
                 failed.append("arms_not_raised")
             if not result["left_right_order"]:
                 failed.append("left_right_order_wrong")
-            print(f"[POSE] Disqualified: {', '.join(failed)}")
+            # Show optional check status separately
+            optional = []
+            if not result["feet_in_standing"]:
+                optional.append("feet_not_in_standing(optional)")
+            opt_str = f" | Optional: {', '.join(optional)}" if optional else ""
+            print(f"[POSE] Disqualified: {', '.join(failed)}{opt_str}")
 
         return result
 
@@ -509,7 +513,8 @@ class DualAuthStateMachine:
     def _update_improper_positioning(self, pose_results: Dict[int, Dict]):
         self.session["improper_positioning"] = None
         for track_id, pose in pose_results.items():
-            if pose["has_lock_contact"] and not (pose["head_in_interaction"] and pose["feet_in_standing"]):
+            # feet_in_standing is optional, so only head_in_interaction is required for proper positioning
+            if pose["has_lock_contact"] and not pose["head_in_interaction"]:
                 self.session["improper_positioning"] = track_id
                 return
 

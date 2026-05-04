@@ -19,9 +19,6 @@ from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
 import config
 
-CAM_ID = config.RTSP_URLS[0]["camera_id"]
-SITE_NAME = config.RTSP_URLS[0]["site_name"]
-EVIDENCE_DIR = os.path.join(config.BASE_OUTPUT_DIR, SITE_NAME, CAM_ID)
 LOG_DIR = "logs"
 CALIBRATED_W, CALIBRATED_H = 2688, 1520
 
@@ -34,18 +31,18 @@ def _scale_polygon(points: np.ndarray, width: int, height: int) -> np.ndarray:
     return np.rint(points.astype(np.float32) * scale).astype(np.int32)
 
 
-def setup_rois(roi_manager: ROIManager, width: int, height: int, scale_rois: bool = False):
+def setup_rois(roi_manager: ROIManager, stream_rois: dict, width: int, height: int, scale_rois: bool = False):
     """Register ROIs in the same coordinate space as the original video frame."""
     transform = (lambda points: _scale_polygon(points, width, height)) if scale_rois else (
         lambda points: points.astype(np.int32).copy()
     )
     rois = {
-        "LOCK_A_ROI": transform(config.LOCK_A_ROI),
-        "LOCK_B_ROI": transform(config.LOCK_B_ROI),
-        "DOOR_ROI": transform(config.DOOR_ROI),
-        "STANDING_ZONE": transform(config.STANDING_ZONE),
-        "INTERACTION_ZONE": transform(config.INTERACTION_ZONE),
-        "DOOR_CORNER_ROI": transform(config.DOOR_CORNER_ROI),
+        "LOCK_A_ROI": transform(stream_rois["LOCK_A_ROI"]),
+        "LOCK_B_ROI": transform(stream_rois["LOCK_B_ROI"]),
+        "DOOR_ROI": transform(stream_rois["DOOR_ROI"]),
+        "STANDING_ZONE": transform(stream_rois["STANDING_ZONE"]),
+        "INTERACTION_ZONE": transform(stream_rois["INTERACTION_ZONE"]),
+        "DOOR_CORNER_ROI": transform(stream_rois["DOOR_CORNER_ROI"]),
     }
 
     for name, points in rois.items():
@@ -244,6 +241,8 @@ def capture(
     alert_system: AlertSystem,
     clean_frame: np.ndarray,
     event_type: str,
+    evidence_dir: str,
+    cam_id: str,
     details: dict = None,
     check_type: str = "System",
     visualizer: "Visualizer" = None,
@@ -258,11 +257,11 @@ def capture(
     date_str = now_ist.strftime("%d-%m-%Y")
     time_str = now_ist.strftime("%H-%M-%S")
 
-    target_dir = os.path.join(EVIDENCE_DIR, date_str)
+    target_dir = os.path.join(evidence_dir, date_str)
     os.makedirs(target_dir, exist_ok=True)
 
     _alert_counter[0] += 1
-    filename = f"alert_{_alert_counter[0]}_{CAM_ID}_{date_str}_{time_str}.png"
+    filename = f"alert_{_alert_counter[0]}_{cam_id}_{date_str}_{time_str}.png"
     full_path = os.path.join(target_dir, filename)
 
     client_frame = clean_frame.copy()
@@ -283,7 +282,8 @@ def capture(
 
 
 def main(
-    video_source: str,
+    stream_config: dict,
+    video_source: str = None,
     show_live: bool = True,
     scale_rois: bool = False,
     process_every: int = 3,
@@ -293,9 +293,14 @@ def main(
     test_window: str = None,
     debug: bool = False,
 ):
-    print("[SYSTEM] Initializing Two-Man Rule Monitoring System...")
+    video_source = video_source or stream_config["rtsp_url"]
+    cam_id = stream_config["camera_id"]
+    site_name = stream_config["site_name"]
+    evidence_dir = os.path.join(config.BASE_OUTPUT_DIR, site_name, cam_id)
+
+    print(f"[SYSTEM] Initializing Two-Man Rule Monitoring System for {site_name} - {cam_id}...")
     _alert_counter[0] = 0
-    os.makedirs(EVIDENCE_DIR, exist_ok=True)
+    os.makedirs(evidence_dir, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
 
     detector = PoseDetector(device=device, half=half)
@@ -312,21 +317,23 @@ def main(
         print("[VIDEO] Processing original frames without resizing.")
         print(f"[VIDEO] Pose inference every {process_every} frame(s). Use --process-every 1 for full analysis.")
 
-        active_rois = setup_rois(roi_manager, width, height, scale_rois=scale_rois)
+        active_rois = setup_rois(roi_manager, stream_config["rois"], width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
         try:
+            stream_ssim_thresh = stream_config.get("ssim_threshold", config.SSIM_THRESHOLD)
             door_verifier = DoorVerifier(
-                config.CLOSED_DOOR_REFERENCE,
-                similarity_threshold=config.SSIM_THRESHOLD
+                stream_config["closed_door_reference"],
+                door_corner_roi=active_rois["DOOR_CORNER_ROI"],
+                similarity_threshold=stream_ssim_thresh
             )
-            print(f"[SYSTEM] Door verifier loaded with threshold {config.SSIM_THRESHOLD}")
+            print(f"[SYSTEM] Door verifier loaded with threshold {stream_ssim_thresh}")
         except FileNotFoundError as e:
             print(f"[WARNING] {e}")
             door_verifier = None
 
         state_machine = DualAuthStateMachine(roi_manager, int(fps))
         visualizer = Visualizer()
-        alert_system = AlertSystem(evidence_dir=EVIDENCE_DIR, log_dir=LOG_DIR)
+        alert_system = AlertSystem(evidence_dir=evidence_dir, log_dir=LOG_DIR)
 
         # Determine initial state based on current IST time
         startup_ist = datetime.now(IST)
@@ -378,7 +385,7 @@ def main(
         morning_post_open_start_frame = None  # frame_idx when post-open window began
         live_window_available = can_show_live_window(show_live)
         if live_window_available:
-            cv2.namedWindow("Two-Man Rule Live ROI Debug", cv2.WINDOW_NORMAL)
+            cv2.namedWindow(f"Two-Man Rule Live ROI Debug - {cam_id}", cv2.WINDOW_NORMAL)
 
         print("[SYSTEM] Starting frame processing loop...")
 
@@ -476,7 +483,7 @@ def main(
                 is_door_open = False
                 ssim_val = None
                 if door_verifier:
-                    if state_machine.should_check_door_state():
+                    if state_machine.should_check_door_state() or debug:
                         is_door_open = door_verifier.verify(frame)
                     else:
                         is_door_open = last_door_state if last_door_state is not None else False
@@ -563,8 +570,8 @@ def main(
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, door_color, 2, cv2.LINE_AA)
 
             if not roi_preview_saved:
-                preview_path = os.path.join(EVIDENCE_DIR, f"ROI_PREVIEW_{CAM_ID}.jpg")
-                os.makedirs(EVIDENCE_DIR, exist_ok=True)
+                preview_path = os.path.join(evidence_dir, f"ROI_PREVIEW_{cam_id}.jpg")
+                os.makedirs(evidence_dir, exist_ok=True)
                 cv2.imwrite(preview_path, frame)
                 print(f"[ROI] ROI preview saved: {preview_path}")
                 roi_preview_saved = True
@@ -572,7 +579,10 @@ def main(
             # ===== EVENTS + CAPTURE =====
             def _capture(event_type, details, check_type="System"):
                 capture(
-                    alert_system, clean_frame, event_type, details,
+                    alert_system, clean_frame, event_type, 
+                    evidence_dir=evidence_dir,
+                    cam_id=cam_id,
+                    details=details,
                     check_type=check_type,
                     visualizer=visualizer,
                     unlocker_labels=unlocker_labels,
@@ -794,7 +804,7 @@ def main(
                     cv2.circle(debug_frame, (cx, cy), 8, (0, 0, 255), -1)
                     label = unlocker_labels.get(track_id, "ignored")
                     cv2.putText(debug_frame, f"{label} center", (cx, cy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
-                debug_path = os.path.join(EVIDENCE_DIR, f"DEBUG_ROI_frame{frame_idx}.jpg")
+                debug_path = os.path.join(evidence_dir, f"DEBUG_ROI_frame{frame_idx}.jpg")
                 cv2.imwrite(debug_path, debug_frame)
                 print(f"[DEBUG] ROI debug frame saved: {debug_path}")
                 print(f"[DEBUG] Scaled ROI centers:")
@@ -826,17 +836,18 @@ def main(
                     break
 
             # ===== PROGRESS LOG =====
-            if tracking_active and frame_idx % 30 == 0:
+            if (tracking_active or debug) and frame_idx % 30 == 0:
                 timers = (f"P1:{state_machine.session['timer_a_seconds']:.1f}s "
                           f"P2:{state_machine.session['timer_b_seconds']:.1f}s")
                 cand_a = f"ID {state_machine.session['candidate_a']}" if state_machine.session["candidate_a"] is not None else "-"
                 cand_b = f"ID {state_machine.session['candidate_b']}" if state_machine.session["candidate_b"] is not None else "-"
                 id_a = f"ID {state_machine.session['id_a']}" if state_machine.session["id_a"] is not None else "-"
                 id_b = f"ID {state_machine.session['id_b']}" if state_machine.session["id_b"] is not None else "-"
+                ssim_str = f" | Door SSIM: {ssim_val:.3f}" if ssim_val is not None else ""
                 print(f"[PROGRESS] Frame {frame_idx}/{total_frames} ({video.get_progress():.1f}%) "
                       f"| Unlockers: {n} | State: {state_machine.session['sequence_state']} "
                       f"| Candidates: P1={cand_a} P2={cand_b} "
-                      f"| Verified: P1={id_a} P2={id_b} | {timers}")
+                      f"| Verified: P1={id_a} P2={id_b} | {timers}{ssim_str}")
 
             if live_window_available:
                 try:
@@ -848,7 +859,7 @@ def main(
                             display_frame, unlocker_labels, tracked_persons, auth_result, is_door_open,
                             persons_auth_status=persons_auth_status,
                         )
-                    cv2.imshow("Two-Man Rule Live ROI Debug", display_frame)
+                    cv2.imshow(f"Two-Man Rule Live ROI Debug - {cam_id}", display_frame)
                     wait_ms = max(1, int(1000 / max(fps, 1)))
                     if cv2.waitKey(wait_ms) & 0xFF == ord("q"):
                         print("[SYSTEM] Live preview stopped by user.")
@@ -860,15 +871,15 @@ def main(
     print("[SYSTEM] Processing complete.")
     log_path = alert_system.save_session_log()
     print(f"[SYSTEM] Session log: {log_path}")
-    print(f"[SYSTEM] Evidence files: {len(os.listdir(EVIDENCE_DIR))}")
+    print(f"[SYSTEM] Evidence files: {len(os.listdir(evidence_dir))}")
     if 'live_window_available' in locals() and live_window_available:
         cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Two-Man Rule monitoring with live ROI overlay.")
-    default_url = config.RTSP_URLS[0]["rtsp_url"]
-    parser.add_argument("video_source", nargs="?", default=default_url, help="Video file path, RTSP stream, or webcam index.")
+    parser.add_argument("--stream-index", type=int, default=None, help="Index of the stream config to use from config.STREAMS_CONFIG. If omitted, runs all streams in parallel.")
+    parser.add_argument("video_source", nargs="?", default=None, help="Video file path, RTSP stream, or webcam index (overrides config).")
     parser.add_argument("--show", action="store_true", help="Enable live OpenCV preview window.")
     parser.add_argument(
         "--scale-rois",
@@ -911,9 +922,54 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    video_source = int(args.video_source) if str(args.video_source).isdigit() else args.video_source
+    if args.stream_index is None:
+        if args.video_source is not None:
+            # Backwards compatibility: if testing a specific video without stream-index, default to 0
+            args.stream_index = 0
+        else:
+            # No parameters provided -> run all streams in parallel
+            import subprocess
+            print(f"[SYSTEM] No stream parameters provided. Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
+            processes = []
+            
+            base_cmd = [sys.executable, sys.argv[0]]
+            if args.show: base_cmd.append("--show")
+            if args.scale_rois: base_cmd.append("--scale-rois")
+            base_cmd.extend(["--process-every", str(args.process_every)])
+            base_cmd.extend(["--device", args.device])
+            if args.no_half: base_cmd.append("--no-half")
+            if args.show_all_detections: base_cmd.append("--show-all-detections")
+            if args.test_window: base_cmd.extend(["--test-window", args.test_window])
+            if args.debug: base_cmd.append("--debug")
+
+            for i in range(len(config.STREAMS_CONFIG)):
+                cmd = base_cmd + ["--stream-index", str(i)]
+                p = subprocess.Popen(cmd)
+                processes.append(p)
+                print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
+                
+            try:
+                for p in processes:
+                    p.wait()
+            except KeyboardInterrupt:
+                print("\n[SYSTEM] Shutting down all streams...")
+                for p in processes:
+                    p.terminate()
+            sys.exit(0)
+
+    if args.stream_index < 0 or args.stream_index >= len(config.STREAMS_CONFIG):
+        print(f"[ERROR] Invalid stream-index {args.stream_index}. Available streams: 0 to {len(config.STREAMS_CONFIG)-1}.")
+        sys.exit(1)
+
+    stream_config = config.STREAMS_CONFIG[args.stream_index]
+
+    video_source = args.video_source
+    if video_source is not None and video_source.isdigit():
+        video_source = int(video_source)
+
     main(
-        video_source,
+        stream_config=stream_config,
+        video_source=video_source,
         show_live=args.show,
         scale_rois=args.scale_rois,
         process_every=args.process_every,
@@ -923,3 +979,4 @@ if __name__ == "__main__":
         test_window=args.test_window,
         debug=args.debug,
     )
+

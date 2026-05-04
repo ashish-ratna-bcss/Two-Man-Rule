@@ -40,24 +40,8 @@ KEYPOINT_HIP_RIGHT = 12
 ANKLE_CONFIDENCE_THRESHOLD = 0.3  # Use ankle if conf >= this
 HIP_FALLBACK_THRESHOLD = 0.5      # Fall back to hip if ankle < this
 
-# ============ ROI DEFINITIONS ============
-LOCK_A_ROI = np.array([(778, 250), (764, 259), (763, 272), (773, 285), (791, 281), (799, 265), (791, 254)], np.int32)
-
-LOCK_B_ROI = np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450), (850, 435), (843, 428)], np.int32)
-
-DOOR_ROI = np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32)
-
-DOOR_CORNER_ROI = np.array([
-    [640.30, 13.22], [659.51, 73.73], [845.86, 9.38]
-], np.int32)
-
-# Reference BGR color for the door corner (from closed_ref.jpg)
-DOOR_CORNER_REF_COLOR = (55.75, 52.93, 48.84)
+# ============ DOOR COLOR THRESHOLD ============
 DOOR_COLOR_SENSITIVITY = 15.0  # Threshold for opening detection
-
-STANDING_ZONE = np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32)
-
-INTERACTION_ZONE = np.array([(272, 160), (1857, 2), (1750, 714), (275, 1392)], np.int32)
 
 # ============ VISUALIZATION ============
 COLOR_DETECTED = (255, 0, 0)     # Blue (BGR)
@@ -85,15 +69,42 @@ TRACK_THRESH = 0.5
 
 # ============ MODEL PATHS ============
 YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
-CLOSED_DOOR_REFERENCE = "closed_ref.jpg"
 
-# ============ CAMERA & ORCHESTRATION CONFIG ============
-RTSP_URLS = [{
-    "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8001/Streaming/Channels/4001",
-    "camera_id": "GF-1-CAM-40",
-    "site_id": "1",
-    "site_name": "somajiguda"
-}]
+# ============ STREAMS & ORCHESTRATION CONFIG ============
+STREAMS_CONFIG = [
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8001/Streaming/Channels/4001",
+        "camera_id": "GF-1-CAM-40",
+        "site_id": "1",
+        "site_name": "somajiguda",
+        "closed_door_reference": "closed_GF-1-CAM-40.jpg",
+        "ssim_threshold": 0.92,
+        "rois": {
+            "LOCK_A_ROI": np.array([(778, 250), (764, 259), (763, 272), (773, 285), (791, 281), (799, 265), (791, 254)], np.int32),
+            "LOCK_B_ROI": np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450), (850, 435), (843, 428)], np.int32),
+            "DOOR_ROI": np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[640.30, 13.22], [659.51, 73.73], [845.86, 9.38]], np.int32),
+            "STANDING_ZONE": np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32),
+            "INTERACTION_ZONE": np.array([(272, 160), (1857, 2), (1750, 714), (275, 1392)], np.int32)
+        }
+    },
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
+        "camera_id": "FF-1-CAM-42",
+        "site_id": "1",
+        "site_name": "somajiguda",
+        "closed_door_reference": "closed_FF-1-CAM-42.jpg",
+        "ssim_threshold": 0.88,
+        "rois": {
+            "LOCK_A_ROI": np.array([(630, 276), (618, 280), (611, 291), (614, 305), (625, 314), (639, 314), (649, 304), (649, 291), (643, 278)], np.int32),
+            "LOCK_B_ROI": np.array([(665, 497), (655, 503), (652, 515), (655, 527), (666, 532), (678, 530), (685, 519), (686, 506), (679, 496)], np.int32),
+            "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[422, 7], [427, 53], [702, 36], [696, 1]], np.int32),
+            "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
+            "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
+        }
+    }
+]
 
 BASE_OUTPUT_DIR = "strong_room_opening"
 

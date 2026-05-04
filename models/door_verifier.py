@@ -10,6 +10,7 @@ class DoorVerifier:
     def __init__(
         self,
         reference_image_path: str,
+        door_corner_roi: np.ndarray,
         similarity_threshold: float = 0.75,
         debounce_threshold: int = 10
     ):
@@ -18,9 +19,9 @@ class DoorVerifier:
         if reference is None:
             raise FileNotFoundError(f"Cannot load reference image: {reference_image_path}")
 
-        # Parse DOOR_CORNER_ROI into crop coords using bounding rect
-        # config.DOOR_CORNER_ROI is a numpy polygon array
-        self.rx, self.ry, self.rw, self.rh = cv2.boundingRect(config.DOOR_CORNER_ROI)
+        # Parse door_corner_roi into crop coords using bounding rect
+        # door_corner_roi is a numpy polygon array
+        self.rx, self.ry, self.rw, self.rh = cv2.boundingRect(door_corner_roi)
 
         # Extract and store reference patch (grayscale)
         ref_crop = reference[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
@@ -41,7 +42,7 @@ class DoorVerifier:
         self.last_ssim = None
         self._frame_tick = 0
 
-        print(f"[DOOR] Initialized | Corner ROI: {config.DOOR_CORNER_ROI} | Patch shape: {self.reference_patch.shape}")
+        print(f"[DOOR] Initialized | Corner ROI: {door_corner_roi.tolist()} | Patch shape: {self.reference_patch.shape}")
 
     def verify(self, frame: np.ndarray) -> bool:
         """
