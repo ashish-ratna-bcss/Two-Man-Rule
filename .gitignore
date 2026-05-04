@@ -1,6 +1,7 @@
 # Logs and Session Data
 logs/
 logs-*/
+strong_room_opening/
 *.log
 
 # Caches and Temporary Files
