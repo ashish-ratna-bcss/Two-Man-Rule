@@ -19,7 +19,7 @@ from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
 import config
 
-LOG_DIR = "logs"
+
 CALIBRATED_W, CALIBRATED_H = 2688, 1520
 
 _alert_counter = [0]  # mutable so capture() can increment across calls
@@ -301,7 +301,7 @@ def main(
     print(f"[SYSTEM] Initializing Two-Man Rule Monitoring System for {site_name} - {cam_id}...")
     _alert_counter[0] = 0
     os.makedirs(evidence_dir, exist_ok=True)
-    os.makedirs(LOG_DIR, exist_ok=True)
+
 
     detector = PoseDetector(device=device, half=half)
     tracker = PersonTracker()
@@ -331,9 +331,10 @@ def main(
             print(f"[WARNING] {e}")
             door_verifier = None
 
-        state_machine = DualAuthStateMachine(roi_manager, int(fps))
+        mirror_lr = stream_config.get("mirror_left_right", False)
+        state_machine = DualAuthStateMachine(roi_manager, int(fps), mirror_left_right=mirror_lr)
         visualizer = Visualizer()
-        alert_system = AlertSystem(evidence_dir=evidence_dir, log_dir=LOG_DIR)
+        alert_system = AlertSystem(evidence_dir=evidence_dir)
 
         # Determine initial state based on current IST time
         startup_ist = datetime.now(IST)
@@ -869,8 +870,6 @@ def main(
                     live_window_available = False
 
     print("[SYSTEM] Processing complete.")
-    log_path = alert_system.save_session_log()
-    print(f"[SYSTEM] Session log: {log_path}")
     print(f"[SYSTEM] Evidence files: {len(os.listdir(evidence_dir))}")
     if 'live_window_available' in locals() and live_window_available:
         cv2.destroyAllWindows()

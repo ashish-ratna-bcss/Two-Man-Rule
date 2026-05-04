@@ -21,13 +21,14 @@ class DualAuthStateMachine:
     a raw tracker detection and is ignored by the authorization logic.
     """
 
-    def __init__(self, roi_manager: ROIManager, fps: int = 30, session_id: Optional[str] = None):
+    def __init__(self, roi_manager: ROIManager, fps: int = 30, session_id: Optional[str] = None, mirror_left_right: bool = False):
         self.roi_manager = roi_manager
         self.fps = max(int(fps or config.DEFAULT_FPS), 1)
         self.dwell_frames = config.calculate_min_unlock_frames(self.fps)
         self.min_unlock_frames = self.dwell_frames
         self.max_unlock_frames = config.calculate_max_unlock_frames(self.fps)
         self.session = config.create_session()
+        self.mirror_left_right = mirror_left_right  # True for top-down cameras where L/R appears flipped
 
         self.active_ids_in_zone: Set[int] = set()
         self.current_frame_count = 0
@@ -556,9 +557,10 @@ class DualAuthStateMachine:
 
     def _left_right_keypoints_in_video_order(self, keypoints: np.ndarray) -> bool:
         """
-        Door-facing/back-to-camera check requested for this camera:
-        left elbow/ankle should appear left in the video, and right elbow/ankle
-        should appear right in the video.
+        Door-facing/back-to-camera check:
+        - Standard (mirror_left_right=False): body-left elbow/ankle should appear LEFT in video frame.
+        - Mirrored (mirror_left_right=True): for top-down cameras where the person faces away,
+          body-left keypoints appear on the RIGHT side of the video frame.
         """
         required_pairs = [
             (config.KEYPOINT_ELBOW_LEFT, config.KEYPOINT_ELBOW_RIGHT),
@@ -569,8 +571,14 @@ class DualAuthStateMachine:
             right = self._visible_keypoint(keypoints, right_idx)
             if left is None or right is None:
                 return False
-            if right[0] <= left[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
-                return False
+            if self.mirror_left_right:
+                # Mirrored: body-left should appear to the RIGHT in video (x is larger)
+                if left[0] <= right[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
+                    return False
+            else:
+                # Standard: body-left should appear to the LEFT in video (x is smaller)
+                if right[0] <= left[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
+                    return False
         return True
 
     def _visible_keypoint(self, keypoints: np.ndarray, idx: int) -> Optional[Tuple[float, float]]:
