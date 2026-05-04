@@ -10,13 +10,11 @@ import config
 class AlertSystem:
     """Handle screenshot capture and event logging."""
 
-    def __init__(self, evidence_dir: str = None, log_dir: str = None):
+    def __init__(self, evidence_dir: str = None):
         self.evidence_dir = evidence_dir or config.EVIDENCE_DIR
-        self.log_dir = log_dir or config.LOG_DIR
 
         # Create directories
         os.makedirs(self.evidence_dir, exist_ok=True)
-        os.makedirs(self.log_dir, exist_ok=True)
 
         self.session_log = []
 
@@ -82,12 +80,3 @@ class AlertSystem:
         }
         self.session_log.append(event)
 
-    def save_session_log(self, session_id: str = None):
-        """Save session log to JSON file."""
-        session_id = session_id or self._filename_timestamp()
-        log_file = os.path.join(self.log_dir, f"session_{session_id}.json")
-
-        with open(log_file, 'w') as f:
-            json.dump(self.session_log, f, indent=2)
-
-        return log_file

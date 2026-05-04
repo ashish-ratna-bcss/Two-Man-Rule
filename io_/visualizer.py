@@ -168,29 +168,45 @@ class Visualizer:
             self.draw_bounding_box(frame, bbox, color, label)
 
         h, w = frame.shape[:2]
-        panel_h = 50
+        panel_w = 400
+        panel_h = 100
+        margin_x = 20
+        margin_y = 20
+        
+        x1 = w - panel_w - margin_x
+        y1 = margin_y
+        x2 = w - margin_x
+        y2 = margin_y + panel_h
+        
+        # Background and Border
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (25, 25, 25), -1)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (100, 100, 100), 2)
+        
         font = cv2.FONT_HERSHEY_SIMPLEX
-
-        # --- 2 Persons panel (top-left) ---
-        # Blank until door transaction completes and auth is evaluated
-        panel_w = 380
-        cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), (20, 20, 20), -1)
+        font_scale = 0.8
+        thickness = 2
+        
+        # Door Status
+        door_label = "Door:"
+        door_val = "OPEN" if is_door_open else "CLOSED"
+        door_color = (0, 0, 255) if is_door_open else (0, 255, 0)
+        
+        # 2 Persons Status
+        persons_label = "2 Persons:"
         if persons_auth_status is None:
-            cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), (80, 80, 80), 2)
-            cv2.putText(frame, "2 Persons: --", (20, 10 + panel_h - 13), font, 0.8, (150, 150, 150), 2, cv2.LINE_AA)
+            persons_val = "--"
+            persons_color = (150, 150, 150)
         else:
-            persons_color = (0, 200, 0) if persons_auth_status else (0, 0, 220)
-            persons_text = "2 Persons: Available" if persons_auth_status else "2 Persons: Unavailable"
-            cv2.rectangle(frame, (10, 10), (10 + panel_w, 10 + panel_h), persons_color, 2)
-            cv2.putText(frame, persons_text, (20, 10 + panel_h - 13), font, 0.8, persons_color, 2, cv2.LINE_AA)
-
-        # --- Door Status panel (top-right) ---
-        door_text = "Door: Open" if is_door_open else "Door: Closed"
-        door_color = (0, 0, 220) if is_door_open else (0, 200, 0)
-        dp_w = 260
-        cv2.rectangle(frame, (w - dp_w - 10, 10), (w - 10, 10 + panel_h), (20, 20, 20), -1)
-        cv2.rectangle(frame, (w - dp_w - 10, 10), (w - 10, 10 + panel_h), door_color, 2)
-        cv2.putText(frame, door_text, (w - dp_w, 10 + panel_h - 13), font, 0.8, door_color, 2, cv2.LINE_AA)
+            persons_val = "AVAILABLE" if persons_auth_status else "UNAVAILABLE"
+            persons_color = (0, 255, 0) if persons_auth_status else (0, 0, 255)
+            
+        # Draw Labels (Left aligned)
+        cv2.putText(frame, door_label, (x1 + 25, y1 + 40), font, font_scale, (200, 200, 200), thickness, cv2.LINE_AA)
+        cv2.putText(frame, persons_label, (x1 + 25, y1 + 80), font, font_scale, (200, 200, 200), thickness, cv2.LINE_AA)
+        
+        # Draw Values (Aligned to the right of the labels)
+        cv2.putText(frame, door_val, (x1 + 180, y1 + 40), font, font_scale, door_color, thickness, cv2.LINE_AA)
+        cv2.putText(frame, persons_val, (x1 + 180, y1 + 80), font, font_scale, persons_color, thickness, cv2.LINE_AA)
 
         return frame
 

@@ -1,0 +1,18 @@
+{
+  "site_id": "1",
+  "cam_id": "FF-1-CAM-42",
+  "window": "morning",
+  "events": [
+    {
+      "timestamp": "2026-05-04T19:33:57.125518",
+      "event_type": "DOOR_OPEN_AUTHORIZED_PRESENCE",
+      "details": {
+        "authorized": true,
+        "p1_id": 2,
+        "p2_id": 26,
+        "transition": "CLOSED_TO_OPEN",
+        "both_in_interaction_zone": true
+      }
+    }
+  ]
+}
