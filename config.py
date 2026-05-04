@@ -56,8 +56,8 @@ SSIM_THRESHOLD = 0.92
 DOOR_VERIFICATION_OCCUPANCY_MAX = 1
 
 # ============ ALERT SYSTEM ============
-EVIDENCE_DIR = "logs/evidence"
-LOG_DIR = "logs"
+EVIDENCE_DIR = "strong_room_opening"
+LOG_DIR = "strong_room_opening"
 
 # ============ OCCLUSION FALLBACK ============
 ANKLE_OCCLUSION_CONFIDENCE_THRESHOLD = 0.3  # Both ankles below this = fallback mode
@@ -79,7 +79,7 @@ STREAMS_CONFIG = [
         "site_name": "somajiguda",
         "closed_door_reference": "closed_GF-1-CAM-40.jpg",
         "ssim_threshold": 0.92,
-        "mirror_left_right": True,   # Top-down cam: body L/R keypoints appear reversed in video frame
+        "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
             "LOCK_A_ROI": np.array([(778, 250), (764, 259), (763, 272), (773, 285), (791, 281), (799, 265), (791, 254)], np.int32),
             "LOCK_B_ROI": np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450), (850, 435), (843, 428)], np.int32),

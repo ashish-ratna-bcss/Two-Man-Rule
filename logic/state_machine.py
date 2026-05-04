@@ -455,26 +455,31 @@ class DualAuthStateMachine:
         result["has_lock_contact"] = result["contact_a"] or result["contact_b"]
 
         # feet_in_standing is OPTIONAL — standing zone may be occluded by objects
+        # left_right_order is OPTIONAL — top-down cameras often have low-confidence ankle keypoints
+        # waist_near_door is OPTIONAL — top-down view causes hip keypoints to land outside DOOR_ROI
         result["qualified"] = (
             result["head_in_interaction"]
-            and result["waist_near_door"]
             and result["contact_a"]
             and result["contact_b"]
             and result["left_arm_engaged"]
             and result["right_arm_engaged"]
             and result["arms_raised"]
-            and result["left_right_order"]
         )
 
         if result["qualified"]:
-            optional_note = "" if result["feet_in_standing"] else " (optional feet_in_standing skipped)"
-            print(f"[POSE] Qualified: all mandatory conditions pass{optional_note}")
+            optional_notes = []
+            if not result["feet_in_standing"]:
+                optional_notes.append("feet_not_in_standing")
+            if not result["left_right_order"]:
+                optional_notes.append("left_right_order_wrong")
+            if not result["waist_near_door"]:
+                optional_notes.append("waist_not_near_door")
+            note = f" (optional skipped: {', '.join(optional_notes)})" if optional_notes else ""
+            print(f"[POSE] Qualified: all mandatory conditions pass{note}")
         else:
             failed = []
             if not result["head_in_interaction"]:
                 failed.append("head_not_in_interaction")
-            if not result["waist_near_door"]:
-                failed.append("waist_not_near_door")
             if not result["contact_a"]:
                 failed.append("no_contact_a")
             if not result["contact_b"]:
@@ -485,12 +490,14 @@ class DualAuthStateMachine:
                 failed.append("right_arm_not_engaged")
             if not result["arms_raised"]:
                 failed.append("arms_not_raised")
-            if not result["left_right_order"]:
-                failed.append("left_right_order_wrong")
-            # Show optional check status separately
+            # Optional checks — shown separately
             optional = []
             if not result["feet_in_standing"]:
-                optional.append("feet_not_in_standing(optional)")
+                optional.append("feet_not_in_standing")
+            if not result["left_right_order"]:
+                optional.append("left_right_order_wrong")
+            if not result["waist_near_door"]:
+                optional.append("waist_not_near_door")
             opt_str = f" | Optional: {', '.join(optional)}" if optional else ""
             print(f"[POSE] Disqualified: {', '.join(failed)}{opt_str}")
 
@@ -557,28 +564,40 @@ class DualAuthStateMachine:
 
     def _left_right_keypoints_in_video_order(self, keypoints: np.ndarray) -> bool:
         """
-        Door-facing/back-to-camera check:
-        - Standard (mirror_left_right=False): body-left elbow/ankle should appear LEFT in video frame.
+        Door-facing/back-to-camera check using elbow keypoints primarily.
+        Ankle check is included only when both ankles are visible (confidence >= threshold).
+        - Standard (mirror_left_right=False): body-left elbow should appear LEFT in video frame.
         - Mirrored (mirror_left_right=True): for top-down cameras where the person faces away,
           body-left keypoints appear on the RIGHT side of the video frame.
+        Note: This check is now OPTIONAL in the qualification gate — low-confidence ankle
+        keypoints in top-down cameras would otherwise block all valid unlockers.
         """
-        required_pairs = [
-            (config.KEYPOINT_ELBOW_LEFT, config.KEYPOINT_ELBOW_RIGHT),
-            (config.KEYPOINT_ANKLE_LEFT, config.KEYPOINT_ANKLE_RIGHT),
-        ]
-        for left_idx, right_idx in required_pairs:
-            left = self._visible_keypoint(keypoints, left_idx)
-            right = self._visible_keypoint(keypoints, right_idx)
-            if left is None or right is None:
+        # Elbow check is the primary check — always required for this function to return True
+        left_elbow = self._visible_keypoint(keypoints, config.KEYPOINT_ELBOW_LEFT)
+        right_elbow = self._visible_keypoint(keypoints, config.KEYPOINT_ELBOW_RIGHT)
+
+        if left_elbow is None or right_elbow is None:
+            return False
+
+        if self.mirror_left_right:
+            if left_elbow[0] <= right_elbow[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
                 return False
+        else:
+            if right_elbow[0] <= left_elbow[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
+                return False
+
+        # Ankle check: only enforce if BOTH ankles are visible
+        left_ankle = self._visible_keypoint(keypoints, config.KEYPOINT_ANKLE_LEFT)
+        right_ankle = self._visible_keypoint(keypoints, config.KEYPOINT_ANKLE_RIGHT)
+
+        if left_ankle is not None and right_ankle is not None:
             if self.mirror_left_right:
-                # Mirrored: body-left should appear to the RIGHT in video (x is larger)
-                if left[0] <= right[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
+                if left_ankle[0] <= right_ankle[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
                     return False
             else:
-                # Standard: body-left should appear to the LEFT in video (x is smaller)
-                if right[0] <= left[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
+                if right_ankle[0] <= left_ankle[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS:
                     return False
+
         return True
 
     def _visible_keypoint(self, keypoints: np.ndarray, idx: int) -> Optional[Tuple[float, float]]:
