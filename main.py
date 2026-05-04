@@ -18,6 +18,19 @@ from io_.video_handler import VideoHandler
 from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
 import config
+import json
+
+
+class _NumpySafeEncoder(json.JSONEncoder):
+    """Handles numpy scalar types that are not natively JSON serializable."""
+    def default(self, obj):
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        return super().default(obj)
 
 
 CALIBRATED_W, CALIBRATED_H = 2688, 1520
@@ -243,6 +256,7 @@ def capture(
     event_type: str,
     evidence_dir: str,
     cam_id: str,
+    site_id: str = "",
     details: dict = None,
     check_type: str = "System",
     visualizer: "Visualizer" = None,
@@ -252,7 +266,7 @@ def capture(
     is_door_open: bool = False,
     persons_auth_status=None,
 ):
-    """Unified capture + log helper. Saves clean client frame with 2 status panels."""
+    """Unified capture + log helper. Saves annotated frame + paired JSON metadata."""
     now_ist = datetime.now(IST)
     date_str = now_ist.strftime("%d-%m-%Y")
     time_str = now_ist.strftime("%H-%M-%S")
@@ -276,8 +290,31 @@ def capture(
         )
 
     ok = cv2.imwrite(full_path, client_frame)
+
+    # Save paired JSON metadata
+    json_path = full_path.rsplit('.', 1)[0] + '.json'
+    event_data = {
+        "site_id": site_id,
+        "cam_id": cam_id,
+        "window": check_type.lower(),
+        "events": [
+            {
+                "timestamp": now_ist.isoformat(),
+                "event_type": event_type,
+                "details": details or {},
+            }
+        ]
+    }
+    try:
+        with open(json_path, "w") as f:
+            json.dump(event_data, f, indent=4, cls=_NumpySafeEncoder)
+        json_ok = True
+    except Exception as e:
+        print(f"[ERROR] Failed to save JSON metadata: {e}")
+        json_ok = False
+
     alert_system.log_event(event_type, details or {})
-    print(f"[CAPTURE] {event_type}: {full_path} (write={'OK' if ok else 'FAILED'})")
+    print(f"[CAPTURE] {event_type}: {full_path} (image={'OK' if ok else 'FAILED'}, json={'OK' if json_ok else 'FAILED'})")
     return full_path
 
 
@@ -570,19 +607,16 @@ def main(
             cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, door_color, 2, cv2.LINE_AA)
 
-            if not roi_preview_saved:
-                preview_path = os.path.join(evidence_dir, f"ROI_PREVIEW_{cam_id}.jpg")
-                os.makedirs(evidence_dir, exist_ok=True)
-                cv2.imwrite(preview_path, frame)
-                print(f"[ROI] ROI preview saved: {preview_path}")
-                roi_preview_saved = True
 
             # ===== EVENTS + CAPTURE =====
+            site_id = stream_config.get("site_id", "")
+
             def _capture(event_type, details, check_type="System"):
                 capture(
-                    alert_system, clean_frame, event_type, 
+                    alert_system, clean_frame, event_type,
                     evidence_dir=evidence_dir,
                     cam_id=cam_id,
+                    site_id=site_id,
                     details=details,
                     check_type=check_type,
                     visualizer=visualizer,
@@ -785,48 +819,6 @@ def main(
                 })
                 auth_success_logged_by_window[active_auth_window] = True
                 print(f"[SYSTEM] Dual person authorization confirmed for {active_auth_window} window.")
-
-            # ===== DEBUG FRAME: save annotated frame when first unlocker is detected =====
-            if tracking_active and should_process_frame and not debug_frame_saved and len(state_machine.active_ids_in_zone) >= 1:
-                debug_frame = frame.copy()
-                # Draw all keypoints for all tracked persons
-                for track_id, person in tracked_persons.items():
-                    if track_id not in unlocker_labels:
-                        continue
-                    kpts = person["keypoints"]
-                    for kp_idx, (kx, ky, kc) in enumerate(kpts):
-                        if kc > 0.3:
-                            cv2.circle(debug_frame, (int(kx), int(ky)), 4, (0, 255, 255), -1)
-                            cv2.putText(debug_frame, str(kp_idx), (int(kx)+4, int(ky)), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255,255,0), 1)
-                    # Draw bbox centroid
-                    bbox = person["bbox"]
-                    cx = int((bbox[0]+bbox[2])/2)
-                    cy = int((bbox[1]+bbox[3])/2)
-                    cv2.circle(debug_frame, (cx, cy), 8, (0, 0, 255), -1)
-                    label = unlocker_labels.get(track_id, "ignored")
-                    cv2.putText(debug_frame, f"{label} center", (cx, cy-10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0,0,255), 1)
-                debug_path = os.path.join(evidence_dir, f"DEBUG_ROI_frame{frame_idx}.jpg")
-                cv2.imwrite(debug_path, debug_frame)
-                print(f"[DEBUG] ROI debug frame saved: {debug_path}")
-                print(f"[DEBUG] Scaled ROI centers:")
-                for name in ["LOCK_A_ROI", "LOCK_B_ROI", "STANDING_ZONE", "INTERACTION_ZONE"]:
-                    c = roi_manager.get_roi_center(name)
-                    print(f"  {name}: center={c}")
-                print(f"[DEBUG] Tracked persons keypoints (wrist R=10, wrist L=9, ankle R=16, ankle L=15):")
-                for track_id, person in tracked_persons.items():
-                    if track_id not in unlocker_labels:
-                        continue
-                    kpts = person["keypoints"]
-                    bbox = person["bbox"]
-                    cx = (bbox[0]+bbox[2])/2
-                    cy = (bbox[1]+bbox[3])/2
-                    wr = kpts[config.KEYPOINT_WRIST_RIGHT]
-                    wl = kpts[config.KEYPOINT_WRIST_LEFT]
-                    ar = kpts[config.KEYPOINT_ANKLE_RIGHT]
-                    al = kpts[config.KEYPOINT_ANKLE_LEFT]
-                    label = unlocker_labels.get(track_id, "ignored")
-                    print(f"  {label}: center=({cx:.0f},{cy:.0f}) | wrist_R=({wr[0]:.0f},{wr[1]:.0f},c={wr[2]:.2f}) | wrist_L=({wl[0]:.0f},{wl[1]:.0f},c={wl[2]:.2f}) | ankle_R=({ar[0]:.0f},{ar[1]:.0f},c={ar[2]:.2f})")
-                debug_frame_saved = True
 
             # ===== TEST WINDOW EXIT =====
             if test_window:
