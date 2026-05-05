@@ -382,15 +382,15 @@ def main(
             morning_check_done = (test_window == "evening")
             evening_check_done = (test_window == "morning")
         else:
-            # If started after 10:30 AM, morning check is neglected for today
-            morning_check_done = curr_hm > "10:30"
-            # If started after 11:00 PM, evening check is neglected for today
-            evening_check_done = curr_hm > "23:00"
+            # If started after 11:00 AM, morning check is neglected for today
+            morning_check_done = curr_hm > "11:00"
+            # If started after 11:58 PM, evening check is neglected for today
+            evening_check_done = curr_hm > "23:58"
             
             if morning_check_done:
-                print(f"[SYSTEM] Startup after 10:30 AM IST. Morning check for {last_reset_date} marked as SKIPPED.")
+                print(f"[SYSTEM] Startup after 11:00 AM IST. Morning check for {last_reset_date} marked as SKIPPED.")
             if evening_check_done:
-                print(f"[SYSTEM] Startup after 11:00 PM IST. Evening check for {last_reset_date} marked as SKIPPED.")
+                print(f"[SYSTEM] Startup after 11:58 PM IST. Evening check for {last_reset_date} marked as SKIPPED.")
         
         frame_idx = 0
         debug_frame_saved = False
@@ -457,8 +457,8 @@ def main(
                 is_morning_window = (test_window == "morning")
                 is_evening_window = (test_window == "evening")
             else:
-                is_morning_window = "09:30" <= curr_hour_min <= "10:30"
-                is_evening_window = "20:30" <= curr_hour_min <= "23:00"
+                is_morning_window = "06:00" <= curr_hour_min <= "11:00"
+                is_evening_window = "12:30" <= curr_hour_min <= "23:58"
             
             current_auth_window = None
             if is_morning_window and not morning_check_done:
@@ -787,7 +787,7 @@ def main(
                 # Idle state
                 status_msg = "STATUS: SYSTEM IDLE (OUTSIDE WINDOWS)"
                 if not is_morning_window and not is_evening_window:
-                    status_msg = f"STATUS: IDLE | NEXT WINDOW: {'MORNING' if curr_hour_min < '09:30' else 'EVENING'}"
+                    status_msg = f"STATUS: IDLE | NEXT WINDOW: {'MORNING' if curr_hour_min < '06:00' else 'EVENING'}"
                 elif morning_check_done and is_morning_window:
                     status_msg = "STATUS: MORNING CHECK COMPLETE"
                 elif evening_check_done and is_evening_window:
