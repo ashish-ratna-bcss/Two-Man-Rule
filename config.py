@@ -99,6 +99,21 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
             "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
         }
+    },
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
+        "camera_id": "GF-2-CAM-21",
+        "site_id": "2",
+        "site_name": "Jubliee Hills",
+        "closed_door_reference": "closed_GF-2-CAM-21.jpg",
+        "ssim_threshold": 0.92,
+        "rois": {
+            "LOCKS_ROI": np.array([(381, 541), (1092, 332), (1134, 830), (545, 1073)], np.int32),
+            "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[488, 113], [493, 172], [609, 72]], np.int32),
+            "STANDING_ZONE": np.array([[688, 1178], [1227, 918], [1420, 1118], [929, 1416]], np.int32),
+            "INTERACTION_ZONE": np.array([[6, 11], [2615, 0], [1927, 1511], [25, 1508]], np.int32)
+        }
     }
 ]
 

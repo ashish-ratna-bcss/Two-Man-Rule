@@ -273,7 +273,7 @@ def capture(
     os.makedirs(target_dir, exist_ok=True)
 
     _alert_counter[0] += 1
-    filename = f"alert_{_alert_counter[0]}_{cam_id}_{date_str}_{time_str}.png"
+    filename = f"alert_{site_id}_{cam_id}_{date_str}_{time_str}.png"
     full_path = os.path.join(target_dir, filename)
 
     client_frame = clean_frame.copy()
