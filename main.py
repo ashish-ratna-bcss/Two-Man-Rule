@@ -634,7 +634,7 @@ def main(
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                _capture("VIOLATION_SAME_PERSON", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
+                _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
                 
                 if current_auth_window == "evening":
                     persons_auth_status = False
