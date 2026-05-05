@@ -83,15 +83,3 @@ class PoseDetector:
 
         self.last_results = detections
         return detections
-
-    def get_keypoint(self, detection: Dict, keypoint_idx: int) -> Tuple[float, float, float]:
-        """
-        Extract single keypoint from detection.
-
-        Returns:
-            (x, y, confidence)
-        """
-        keypoints = detection["keypoints"]
-        if keypoint_idx < len(keypoints):
-            return tuple(keypoints[keypoint_idx])
-        return (0, 0, 0)

@@ -4,13 +4,14 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
-MORNING_POST_OPEN_AUTH_SECONDS = 5.0  # After door opens, wait up to 5s for 2 authenticated persons
+MORNING_POST_OPEN_AUTH_SECONDS = 10.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
+                                        # Increased from 5s to allow the A→B sequential gate to complete
+                                        # (both wrists on LOCK_A, then both wrists on LOCK_B) before timeout.
 
 # ============ TIMERS (in seconds) ============
 # One valid key-turn/unlock interaction must last at least 6s and no more than 10s.
 MIN_UNLOCK_SECONDS = 6.0
 MAX_UNLOCK_SECONDS = 10.0
-DWELL_THRESHOLD_SECONDS = MIN_UNLOCK_SECONDS
 EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS = 300.0
 
 # ============ GEOMETRIC CONSTRAINTS ============
@@ -29,6 +30,8 @@ KEYPOINT_WRIST_LEFT = 9
 KEYPOINT_WRIST_RIGHT = 10
 KEYPOINT_ELBOW_LEFT = 7
 KEYPOINT_ELBOW_RIGHT = 8
+KEYPOINT_EAR_LEFT = 3
+KEYPOINT_EAR_RIGHT = 4
 KEYPOINT_SHOULDER_LEFT = 5
 KEYPOINT_SHOULDER_RIGHT = 6
 KEYPOINT_ANKLE_LEFT = 15
@@ -40,9 +43,6 @@ KEYPOINT_HIP_RIGHT = 12
 ANKLE_CONFIDENCE_THRESHOLD = 0.3  # Use ankle if conf >= this
 HIP_FALLBACK_THRESHOLD = 0.5      # Fall back to hip if ankle < this
 
-# ============ DOOR COLOR THRESHOLD ============
-DOOR_COLOR_SENSITIVITY = 15.0  # Threshold for opening detection
-
 # ============ VISUALIZATION ============
 COLOR_DETECTED = (255, 0, 0)     # Blue (BGR)
 COLOR_UNLOCKING = (0, 255, 255)  # Yellow
@@ -53,11 +53,8 @@ PROGRESS_BAR_THICKNESS = 3
 
 # ============ SSIM & DOOR VERIFICATION ============
 SSIM_THRESHOLD = 0.92
-DOOR_VERIFICATION_OCCUPANCY_MAX = 1
 
 # ============ ALERT SYSTEM ============
-EVIDENCE_DIR = "strong_room_opening"
-LOG_DIR = "strong_room_opening"
 
 # ============ OCCLUSION FALLBACK ============
 ANKLE_OCCLUSION_CONFIDENCE_THRESHOLD = 0.3  # Both ankles below this = fallback mode
@@ -123,21 +120,11 @@ def create_session():
         "timer_b_frames": 0,
         "timer_a_seconds": 0.0,
         "timer_b_seconds": 0.0,
-        "door_opened": False,
         "grace_buffer_a": 0,
         "grace_buffer_b": 0,
-        "last_elbow_pos_a": None,
-        "last_elbow_pos_b": None,
-        "last_shoulder_pos_a": None,
-        "last_shoulder_pos_b": None,
         "improper_positioning": None,
         "violation_type": None,
-        "auth_success_logged": False,
     }
-
-def calculate_dwell_frames(fps):
-    """Convert minimum unlock seconds to frame count based on actual video FPS."""
-    return int(DWELL_THRESHOLD_SECONDS * fps)
 
 def calculate_min_unlock_frames(fps):
     """Convert minimum unlock seconds to frame count based on actual video FPS."""

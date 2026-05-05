@@ -86,23 +86,6 @@ class Visualizer:
 
         return frame
 
-    def draw_keypoint(
-        self,
-        frame: np.ndarray,
-        x: float,
-        y: float,
-        confidence: float,
-        color: Tuple[int, int, int] = (0, 255, 0),
-        radius: int = 5
-    ) -> np.ndarray:
-        """Draw a single keypoint with confidence-based sizing."""
-        if confidence < 0.3:
-            return frame
-
-        radius = max(2, int(radius * confidence))
-        cv2.circle(frame, (int(x), int(y)), radius, color, -1)
-        return frame
-
     def draw_status_text(
         self,
         frame: np.ndarray,

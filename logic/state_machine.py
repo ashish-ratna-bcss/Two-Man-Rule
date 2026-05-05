@@ -40,7 +40,6 @@ class DualAuthStateMachine:
         self.door_roi_person_overlap = False
 
         # Saved once both different unlockers complete their 6-10s interaction.
-        self.authorized_session_buffer: Optional[Dict] = None
         # Stable physical-person anchors. These let P1/P2 survive raw tracker ID churn.
         self.slot_anchors = {"a": None, "b": None}
         self.verified_anchors = {"a": None, "b": None}
@@ -58,6 +57,13 @@ class DualAuthStateMachine:
         # Last known bbox per slot — updated every frame the person is directly detected
         # Used to validate anchor-based re-ID candidates (same body size = same person)
         self.last_seen_bbox = {"a": None, "b": None}
+
+        # Per-person sequential lock interaction progress.
+        # A tracker ID is only promoted to candidate AFTER:
+        #   Step 1 — both wrists (or elbow fallback) near LOCK_A simultaneously
+        #   Step 2 — both wrists (or elbow fallback) near LOCK_B simultaneously (after Step 1)
+        # Dict: track_id -> {"a_touched": bool, "b_touched": bool}
+        self.person_lock_progress: Dict[int, Dict] = {}
 
     # ================================================================
     # CENSUS / CLEARANCE
@@ -125,8 +131,14 @@ class DualAuthStateMachine:
         pose_results = {}
         interacting_ids: Set[int] = set()
 
+        # Purge sequential lock progress for IDs that have left the tracker
+        stale_ids = [tid for tid in self.person_lock_progress if tid not in tracked_persons]
+        for tid in stale_ids:
+            del self.person_lock_progress[tid]
+            print(f"[LOCK] Sequential A\u2192B progress cleared for lost ID {tid}")
+
         for track_id, person in tracked_persons.items():
-            pose = self._evaluate_unlock_pose(person)
+            pose = self._evaluate_unlock_pose(person, track_id)
             pose_results[track_id] = pose
             if pose["qualified"]:
                 interacting_ids.add(track_id)
@@ -206,7 +218,6 @@ class DualAuthStateMachine:
                 frame_step=frame_step,
             )
         else:
-            self._validate_both_ids_in_interaction_zone(tracked_persons, pose_results)
             self.session["sequence_state"] = "READY_FOR_DOOR_OPEN"
 
     def _update_unlock_slot(
@@ -328,25 +339,8 @@ class DualAuthStateMachine:
         self.all_unlocker_ids = {"P1_unlocker": set(), "P2_unlocker": set()}
         self.body_fingerprints = {"a": None, "b": None}
         self.last_seen_bbox = {"a": None, "b": None}
+        self.person_lock_progress = {}
 
-    def _validate_both_ids_in_interaction_zone(self, tracked_persons: Dict[int, Dict], pose_results: Dict[int, Dict]):
-        """Verify both assigned persons have heads in INTERACTION_ZONE."""
-        id_a = self.session.get("id_a")
-        id_b = self.session.get("id_b")
-
-        if id_a is not None and id_a in pose_results:
-            pose_a = pose_results[id_a]
-            if pose_a.get("head_in_interaction"):
-                print(f"[VALIDATION] P1 (ID {id_a}) head confirmed in INTERACTION_ZONE")
-            else:
-                print(f"[VALIDATION] P1 (ID {id_a}) head NOT in INTERACTION_ZONE")
-
-        if id_b is not None and id_b in pose_results:
-            pose_b = pose_results[id_b]
-            if pose_b.get("head_in_interaction"):
-                print(f"[VALIDATION] P2 (ID {id_b}) head confirmed in INTERACTION_ZONE")
-            else:
-                print(f"[VALIDATION] P2 (ID {id_b}) head NOT in INTERACTION_ZONE")
 
     def _refresh_verified_slots(self, pose_results: Dict[int, Dict]):
         for slot in ("a", "b"):
@@ -408,7 +402,19 @@ class DualAuthStateMachine:
     # ================================================================
     # UNLOCK POSE RULES
     # ================================================================
-    def _evaluate_unlock_pose(self, person: Dict) -> Dict:
+    def _evaluate_unlock_pose(self, person: Dict, track_id: int = None) -> Dict:
+        """
+        Evaluate whether this person's pose qualifies them for an unlock slot.
+
+        Sequential dual-lock gate (A → B):
+          Step 1 — Both wrists (wrist-first; elbow as fallback) must be near LOCK_A
+                   simultaneously. Once confirmed, a_touched is latched True.
+          Step 2 — After a_touched, both wrists must be near LOCK_B simultaneously.
+                   Once confirmed, b_touched is latched True and the person qualifies.
+
+        After completing A→B, the person stays qualified as long as their head is
+        in INTERACTION_ZONE and arms are raised (grace buffer handles brief occlusion).
+        """
         keypoints = person.get("keypoints")
         bbox = person.get("bbox")
 
@@ -416,9 +422,15 @@ class DualAuthStateMachine:
             "qualified": False,
             "head_in_interaction": False,
             "feet_in_standing": False,
-            "waist_near_door": False,
+            "waist_near_door": False,      # OPTIONAL — hip inside DOOR_ROI
+            # Ear orientation gate: right ear right, left ear left (mandatory when both visible)
+            "ear_order_correct": False,
+            # both_on_a/b = both wrists (or elbow fallback) near the lock RIGHT NOW
             "contact_a": False,
             "contact_b": False,
+            # sequential A→B completion flags (latched per track_id)
+            "a_completed": False,
+            "b_completed": False,
             "left_arm_engaged": False,
             "right_arm_engaged": False,
             "arms_raised": False,
@@ -439,71 +451,161 @@ class DualAuthStateMachine:
         fx, fy = self._get_base_position(keypoints, bbox)
         result["feet_in_standing"] = self.roi_manager.point_in_roi("STANDING_ZONE", fx, fy)
         result["anchor"] = self._person_anchor(keypoints, bbox, head_pos, (fx, fy))
-
-        result["waist_near_door"] = self._waist_near_door(keypoints, bbox)
-
-        result["contact_a"] = self._side_contacts_lock(keypoints, "left", "LOCK_A_ROI") or self._side_contacts_lock(
-            keypoints, "right", "LOCK_A_ROI"
-        )
-        result["contact_b"] = self._side_contacts_lock(keypoints, "left", "LOCK_B_ROI") or self._side_contacts_lock(
-            keypoints, "right", "LOCK_B_ROI"
-        )
-        result["left_arm_engaged"] = self._side_contacts_any_lock(keypoints, "left")
-        result["right_arm_engaged"] = self._side_contacts_any_lock(keypoints, "right")
+        result["waist_near_door"] = self._waist_near_door(keypoints, bbox)  # OPTIONAL
         result["arms_raised"] = self._arms_raised_towards_door(keypoints, bbox)
         result["left_right_order"] = self._left_right_keypoints_in_video_order(keypoints)
-        result["has_lock_contact"] = result["contact_a"] or result["contact_b"]
 
-        # feet_in_standing is OPTIONAL — standing zone may be occluded by objects
-        # left_right_order is OPTIONAL — top-down cameras often have low-confidence ankle keypoints
-        # waist_near_door is OPTIONAL — top-down view causes hip keypoints to land outside DOOR_ROI
-        result["qualified"] = (
-            result["head_in_interaction"]
-            and result["contact_a"]
-            and result["contact_b"]
-            and result["left_arm_engaged"]
-            and result["right_arm_engaged"]
-            and result["arms_raised"]
+        # ── Ear orientation gate ───────────────────────────────────────────────
+        # Right ear must appear to the right, left ear to the left in the video frame.
+        # When both ears visible this is MANDATORY — it confirms the person is correctly
+        # facing/oriented towards the door before any lock interaction is counted.
+        # If only one ear is visible (or neither), we fall back gracefully to True.
+        result["ear_order_correct"] = self._ear_order_correct(keypoints)
+
+        # Per-side wrist-first (elbow fallback) contact checks
+        result["left_arm_engaged"] = self._side_contacts_any_lock(keypoints, "left")
+        result["right_arm_engaged"] = self._side_contacts_any_lock(keypoints, "right")
+
+        # Both wrists (or elbow fallback) near each lock simultaneously
+        both_on_a = self._both_keypoints_near_lock(keypoints, "LOCK_A_ROI")
+        both_on_b = self._both_keypoints_near_lock(keypoints, "LOCK_B_ROI")
+        result["contact_a"] = both_on_a
+        result["contact_b"] = both_on_b
+
+        # has_lock_contact: any wrist/elbow near any lock — used for improper-positioning check
+        result["has_lock_contact"] = (
+            self._side_contacts_any_lock(keypoints, "left")
+            or self._side_contacts_any_lock(keypoints, "right")
         )
 
+        # ── Sequential A → B progress (latched per track_id) ──────────────────
+        # Ear orientation must pass BEFORE any lock interaction progress is credited.
+        # This ensures we only track purposeful, correctly-oriented interactions.
+        if track_id is not None:
+            progress = self.person_lock_progress.get(
+                track_id, {"a_touched": False, "b_touched": False}
+            )
+
+            if result["ear_order_correct"]:
+                if not progress["a_touched"]:
+                    # Step 1: both wrists on LOCK_A — ear orientation confirmed
+                    if both_on_a:
+                        progress["a_touched"] = True
+                        print(
+                            f"[LOCK] ID {track_id}: ears ✓ + LOCK_A contacted (both wrists/elbows) "
+                            f"→ now watching for LOCK_B"
+                        )
+                elif not progress["b_touched"]:
+                    # Step 2: both wrists move to LOCK_B — ear orientation still confirmed
+                    if both_on_b:
+                        progress["b_touched"] = True
+                        print(
+                            f"[LOCK] ID {track_id}: ears ✓ + LOCK_B contacted (both wrists/elbows) "
+                            f"→ A→B sequence COMPLETE — candidate eligible"
+                        )
+            else:
+                # Ear order wrong — person not correctly oriented; lock progress blocked
+                if both_on_a or both_on_b:
+                    print(
+                        f"[LOCK] ID {track_id}: ear order FAILED — lock contact ignored "
+                        f"until orientation is corrected"
+                    )
+
+            self.person_lock_progress[track_id] = progress
+            result["a_completed"] = progress["a_touched"]
+            result["b_completed"] = progress["b_touched"]
+        else:
+            # track_id unknown — cannot maintain sequential state
+            result["a_completed"] = both_on_a and result["ear_order_correct"]
+            result["b_completed"] = both_on_b and result["ear_order_correct"]
+
+        # ── Qualification gate ─────────────────────────────────────────────────
+        # MANDATORY : head_in_interaction, ear_order_correct, b_completed (A→B), arms_raised
+        # OPTIONAL  : feet_in_standing  — standing zone may be occluded by objects
+        #           : left_right_order  — low-confidence ankles on top-down cameras
+        #           : waist_near_door   — hip inside DOOR_ROI; top-down view distorts hips
+        if result["b_completed"]:
+            # A→B sequence done — stay qualified as long as core mandatory checks hold
+            result["qualified"] = (
+                result["head_in_interaction"]
+                and result["ear_order_correct"]
+                and result["arms_raised"]
+            )
+        else:
+            result["qualified"] = False
+
+        # ── Debug logging ──────────────────────────────────────────────────────
+        id_tag = f" ID {track_id}" if track_id is not None else ""
         if result["qualified"]:
             optional_notes = []
             if not result["feet_in_standing"]:
                 optional_notes.append("feet_not_in_standing")
             if not result["left_right_order"]:
-                optional_notes.append("left_right_order_wrong")
+                optional_notes.append("elbow_order_skipped")
             if not result["waist_near_door"]:
                 optional_notes.append("waist_not_near_door")
             note = f" (optional skipped: {', '.join(optional_notes)})" if optional_notes else ""
-            print(f"[POSE] Qualified: all mandatory conditions pass{note}")
+            print(f"[POSE]{id_tag} Qualified: ears✓ A→B✓ head✓ arms✓{note}")
+        elif result["a_completed"]:
+            print(
+                f"[POSE]{id_tag} A done — waiting LOCK_B | ears={result['ear_order_correct']} "
+                f"both_on_b={both_on_b} head={result['head_in_interaction']} arms={result['arms_raised']}"
+            )
         else:
             failed = []
+            if not result["ear_order_correct"]:
+                failed.append("ear_order_wrong")
             if not result["head_in_interaction"]:
                 failed.append("head_not_in_interaction")
-            if not result["contact_a"]:
-                failed.append("no_contact_a")
-            if not result["contact_b"]:
-                failed.append("no_contact_b")
-            if not result["left_arm_engaged"]:
-                failed.append("left_arm_not_engaged")
-            if not result["right_arm_engaged"]:
-                failed.append("right_arm_not_engaged")
+            if not both_on_a:
+                l = self._side_contacts_lock(keypoints, "left",  "LOCK_A_ROI")
+                r = self._side_contacts_lock(keypoints, "right", "LOCK_A_ROI")
+                failed.append(f"need_both_wrists_on_LOCK_A(L={l} R={r})")
             if not result["arms_raised"]:
                 failed.append("arms_not_raised")
-            # Optional checks — shown separately
             optional = []
             if not result["feet_in_standing"]:
                 optional.append("feet_not_in_standing")
             if not result["left_right_order"]:
-                optional.append("left_right_order_wrong")
+                optional.append("elbow_order_wrong")
             if not result["waist_near_door"]:
                 optional.append("waist_not_near_door")
             opt_str = f" | Optional: {', '.join(optional)}" if optional else ""
-            print(f"[POSE] Disqualified: {', '.join(failed)}{opt_str}")
+            print(f"[POSE]{id_tag} Step1 waiting: {', '.join(failed)}{opt_str}")
 
         return result
 
+    def _ear_order_correct(self, keypoints: np.ndarray) -> bool:
+        """Verify left/right ear orientation matches expected camera perspective.
+
+        Right ear must appear to the RIGHT, left ear to the LEFT in the video frame
+        (reversed for mirror_left_right cameras). This confirms the person is correctly
+        oriented towards the door before any lock interaction progress is credited.
+
+        Graceful fallback:
+          - Both ears invisible → True  (cannot determine; don't block)
+          - Only one ear visible → True (ambiguous; don't block)
+          - Both visible → enforce order with LEFT_RIGHT_ORDER_MIN_PIXELS margin
+        """
+        left_ear  = self._visible_keypoint(keypoints, config.KEYPOINT_EAR_LEFT)
+        right_ear = self._visible_keypoint(keypoints, config.KEYPOINT_EAR_RIGHT)
+
+        if left_ear is None or right_ear is None:
+            # Cannot determine orientation — don't block the person
+            return True
+
+        if self.mirror_left_right:
+            # Top-down / mirrored camera: body-left ear appears on video RIGHT
+            return left_ear[0] > right_ear[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS
+        else:
+            # Standard camera: body-left ear appears on video LEFT
+            return left_ear[0] < right_ear[0] - config.LEFT_RIGHT_ORDER_MIN_PIXELS
+
     def _waist_near_door(self, keypoints: np.ndarray, bbox) -> bool:
+        """OPTIONAL check — hip keypoint inside DOOR_ROI.
+        Top-down camera angles frequently place hip keypoints outside the door polygon
+        even for correctly positioned persons; this check must never block qualification.
+        """
         hr_x, hr_y, hr_c = keypoints[config.KEYPOINT_HIP_RIGHT]
         hl_x, hl_y, hl_c = keypoints[config.KEYPOINT_HIP_LEFT]
 
@@ -544,6 +646,15 @@ class DualAuthStateMachine:
         )
 
     def _side_contacts_lock(self, keypoints: np.ndarray, side: str, lock_roi_name: str) -> bool:
+        """Check if one side's wrist (or elbow fallback) is near the given lock.
+
+        Priority:
+          1. Wrist — must be within HAND_LOCK_PROXIMITY_PIXELS (80 px) of the lock.
+             If the wrist keypoint is visible, it is the sole arbiter.
+          2. Elbow — only used as a fallback when the wrist keypoint is
+             invisible or below confidence threshold (occluded/behind body).
+             Allowed within ELBOW_LOCK_PROXIMITY_PIXELS (130 px).
+        """
         if side == "left":
             wrist_idx = config.KEYPOINT_WRIST_LEFT
             elbow_idx = config.KEYPOINT_ELBOW_LEFT
@@ -554,13 +665,28 @@ class DualAuthStateMachine:
         wrist = self._visible_keypoint(keypoints, wrist_idx)
         elbow = self._visible_keypoint(keypoints, elbow_idx)
 
-        wrist_contact = wrist is not None and self._point_in_or_near_roi(
-            lock_roi_name, wrist, config.HAND_LOCK_PROXIMITY_PIXELS
-        )
-        elbow_contact = elbow is not None and self._point_in_or_near_roi(
-            lock_roi_name, elbow, config.ELBOW_LOCK_PROXIMITY_PIXELS
-        )
-        return wrist_contact or elbow_contact
+        # Wrist-first: visible wrist MUST be near the lock — no elbow override
+        if wrist is not None:
+            return self._point_in_or_near_roi(
+                lock_roi_name, wrist, config.HAND_LOCK_PROXIMITY_PIXELS
+            )
+
+        # Elbow fallback: only when wrist is invisible / low-confidence
+        if elbow is not None:
+            return self._point_in_or_near_roi(
+                lock_roi_name, elbow, config.ELBOW_LOCK_PROXIMITY_PIXELS
+            )
+
+        return False
+
+    def _both_keypoints_near_lock(self, keypoints: np.ndarray, lock_roi_name: str) -> bool:
+        """Return True only when BOTH the left AND right side each have a wrist
+        (or elbow fallback) near the given lock ROI simultaneously.
+        This is the core gate for the sequential A→B dual-lock check.
+        """
+        left_contact = self._side_contacts_lock(keypoints, "left", lock_roi_name)
+        right_contact = self._side_contacts_lock(keypoints, "right", lock_roi_name)
+        return left_contact and right_contact
 
     def _left_right_keypoints_in_video_order(self, keypoints: np.ndarray) -> bool:
         """
@@ -808,72 +934,10 @@ class DualAuthStateMachine:
         self.all_unlocker_ids[tag].add(track_id)
         print(f"[TAG] ID {track_id} tagged as {tag}")
 
-    def get_unlocker_by_tag(self, tag: str) -> Optional[int]:
-        """Get current primary ID for unlocker tag."""
-        ids = self.all_unlocker_ids.get(tag, set())
-        if ids:
-            return min(ids)  # Return earliest assigned ID as primary
-        return None
-
     def get_all_ids_for_tag(self, tag: str) -> Set[int]:
         """Get all IDs ever assigned to this unlocker."""
         return self.all_unlocker_ids.get(tag, set()).copy()
 
-    def is_unlocker_tracked(self, slot: str, tracked_persons: Dict[int, Dict]) -> bool:
-        """
-        Check if unlocker is currently tracked (by ANY of their IDs).
-        Enables tracking continuity across ID changes.
-        """
-        tag = f"P{1 if slot == 'a' else 2}_unlocker"
-        unlocker_ids = self.all_unlocker_ids.get(tag, set())
-        return any(track_id in tracked_persons for track_id in unlocker_ids)
-
-    def try_reassign_unlocker_id(self, slot: str, tracked_persons: Dict[int, Dict], anchor: Optional[Tuple]) -> Optional[int]:
-        """
-        If unlocker's current ID is lost, find new ID by anchor matching.
-        Assign new ID same unlocker tag for continuity.
-
-        Returns: New track_id if match found, else None
-        """
-        tag = f"P{1 if slot == 'a' else 2}_unlocker"
-        current_id = self.session.get(f"id_{slot}")
-
-        # Already have valid current ID tracked
-        if current_id is not None and current_id in tracked_persons:
-            return None
-
-        # Find new ID matching anchor
-        if anchor is None:
-            return None
-
-        best_match = None
-        best_dist = config.UNLOCKER_ANCHOR_MATCH_PIXELS
-
-        for track_id, person in tracked_persons.items():
-            # Skip if already tagged as different unlocker
-            if track_id in self.unlocker_tags and self.unlocker_tags[track_id] != tag:
-                continue
-            # Skip if already our unlocker
-            if track_id in self.all_unlocker_ids[tag]:
-                continue
-
-            bbox = person.get("bbox")
-            if bbox is None:
-                continue
-
-            center = self._bbox_bottom_center(bbox)
-            dist = np.linalg.norm(np.array(center) - np.array(anchor))
-
-            if dist < best_dist:
-                best_dist = dist
-                best_match = track_id
-
-        if best_match is not None:
-            self.assign_unlocker_tag(best_match, slot)
-            print(f"[REASSIGN] P{1 if slot == 'a' else 2} ID {current_id} lost, reassigned to ID {best_match} (dist={best_dist:.1f})")
-            return best_match
-
-        return None
 
     # ================================================================
     # AUTHORIZATION
@@ -889,16 +953,6 @@ class DualAuthStateMachine:
         violation = self.session.get("violation_type")
         if not authorized and violation is None:
             violation = "INCOMPLETE"
-
-        if authorized and self.authorized_session_buffer is None:
-            self.authorized_session_buffer = {
-                "id_a": id_a,
-                "id_b": id_b,
-                "timer_a_seconds": self.session["timer_a_seconds"],
-                "timer_b_seconds": self.session["timer_b_seconds"],
-                "sequence_state": self.session["sequence_state"],
-            }
-            print("[AUTH] Session buffer saved: P1 and P2 verified")
 
         return {
             "authorized": authorized,
@@ -927,19 +981,6 @@ class DualAuthStateMachine:
 
         return True
 
-    def check_door_violation(self) -> Optional[str]:
-        if self.authorized_session_buffer is None:
-            return "LONE_WOLF"
-
-        buf = self.authorized_session_buffer
-        if buf["id_a"] != buf["id_b"] and buf["id_a"] is not None and buf["id_b"] is not None:
-            return None
-        return "LONE_WOLF"
-
-    def get_session(self) -> Dict:
-        return self.session.copy()
-
     def reset_session(self):
         self._reset_all_timers()
-        self.authorized_session_buffer = None
         self.current_frame_count += 1

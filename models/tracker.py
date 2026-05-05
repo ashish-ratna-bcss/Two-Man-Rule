@@ -174,11 +174,3 @@ class PersonTracker:
 
         self.tracked_persons = new_tracked
         return self.tracked_persons
-
-    def get_tracked_ids(self) -> List[int]:
-        """Return list of currently tracked person IDs."""
-        return list(self.tracked_persons.keys())
-
-    def get_person(self, track_id: int) -> Dict:
-        """Get tracked person data by ID."""
-        return self.tracked_persons.get(track_id)

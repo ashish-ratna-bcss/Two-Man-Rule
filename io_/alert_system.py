@@ -16,18 +16,8 @@ class AlertSystem:
         # Create directories
         os.makedirs(self.evidence_dir, exist_ok=True)
 
-        self.session_log = []
-
-    def _timestamp_string(self) -> str:
-        """Return ISO timestamp string."""
-        return datetime.now().isoformat()
-
     def log_event(self, event_type: str, details: Dict = None):
-        """Log a generic event to memory."""
-        event = {
-            "timestamp": self._timestamp_string(),
-            "event_type": event_type,
-            "details": details or {}
-        }
-        self.session_log.append(event)
+        """Log a generic event (printing only since session_log is dead)."""
+        # In a real system, this would push to a database or cloud logger.
+        pass
 
