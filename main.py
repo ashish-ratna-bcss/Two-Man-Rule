@@ -50,8 +50,7 @@ def setup_rois(roi_manager: ROIManager, stream_rois: dict, width: int, height: i
         lambda points: points.astype(np.int32).copy()
     )
     rois = {
-        "LOCK_A_ROI": transform(stream_rois["LOCK_A_ROI"]),
-        "LOCK_B_ROI": transform(stream_rois["LOCK_B_ROI"]),
+        "LOCKS_ROI": transform(stream_rois["LOCKS_ROI"]),
         "DOOR_ROI": transform(stream_rois["DOOR_ROI"]),
         "STANDING_ZONE": transform(stream_rois["STANDING_ZONE"]),
         "INTERACTION_ZONE": transform(stream_rois["INTERACTION_ZONE"]),
@@ -85,8 +84,7 @@ def draw_rois(visualizer: Visualizer, frame: np.ndarray, rois: dict):
     roi_styles = {
         "INTERACTION_ZONE": ((100, 100, 255), 1),
         "STANDING_ZONE": ((0, 200, 255), 1),
-        "LOCK_A_ROI": ((0, 255, 0), 2),
-        "LOCK_B_ROI": ((0, 255, 0), 2),
+        "LOCKS_ROI": ((0, 255, 255), 2),
         "DOOR_ROI": ((255, 0, 0), 1),
         "DOOR_CORNER_ROI": ((255, 255, 255), 2),
     }
@@ -562,14 +560,14 @@ def main(
             draw_pose_debug(frame, tracked_persons, visible_pose_ids)
 
             # Draw progress bars at lock centers
-            lock_a_center = roi_manager.get_roi_center("LOCK_A_ROI")
-            lock_b_center = roi_manager.get_roi_center("LOCK_B_ROI")
-            if lock_a_center:
-                pct = min((state_machine.session["timer_a_seconds"] / config.MIN_UNLOCK_SECONDS) * 100, 100)
-                visualizer.draw_circular_progress_bar(frame, tuple(map(int, lock_a_center)), pct)
-            if lock_b_center:
-                pct = min((state_machine.session["timer_b_seconds"] / config.MIN_UNLOCK_SECONDS) * 100, 100)
-                visualizer.draw_circular_progress_bar(frame, tuple(map(int, lock_b_center)), pct)
+            locks_center = roi_manager.get_roi_center("LOCKS_ROI")
+            if locks_center:
+                pct_a = min((state_machine.session.get("timer_a_seconds", 0) / config.MIN_UNLOCK_SECONDS) * 100, 100)
+                pct_b = min((state_machine.session.get("timer_b_seconds", 0) / config.MIN_UNLOCK_SECONDS) * 100, 100)
+                if pct_a > 0:
+                    visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_a)
+                elif pct_b > 0:
+                    visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_b)
 
             # Stable Unlockers Count based on assigned sessions
             n = 0
@@ -636,7 +634,7 @@ def main(
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                _capture("VIOLATION_SAME_PERSON", {"reason": "same_person_tried_both_slots"}, "Security")
+                _capture("VIOLATION_SAME_PERSON", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
                 
                 if current_auth_window == "evening":
                     persons_auth_status = False

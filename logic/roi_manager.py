@@ -12,6 +12,7 @@ class ROIManager:
     def register_polygon_roi(self, name: str, points: List[Tuple[int, int]]):
         """Register a polygonal ROI."""
         self.rois[name] = {
+            "type": "polygon",
             "points": np.array(points, dtype=np.int32)
         }
 

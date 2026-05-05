@@ -58,7 +58,7 @@ SSIM_THRESHOLD = 0.92
 
 # ============ OCCLUSION FALLBACK ============
 ANKLE_OCCLUSION_CONFIDENCE_THRESHOLD = 0.3  # Both ankles below this = fallback mode
-HEAD_TO_LOCKER_A_MAX_PIXELS = 150  # Max distance from head to LOCKER_A polygon
+HEAD_TO_LOCKS_MAX_PIXELS = 150  # Max distance from head to LOCKS_ROI polygon
 
 # ============ BYTETRACK PARAMETERS ============
 TRACK_BUFFER = 30
@@ -78,8 +78,7 @@ STREAMS_CONFIG = [
         "ssim_threshold": 0.92,
         "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
-            "LOCK_A_ROI": np.array([(778, 250), (764, 259), (763, 272), (773, 285), (791, 281), (799, 265), (791, 254)], np.int32),
-            "LOCK_B_ROI": np.array([(828, 429), (818, 440), (822, 453), (835, 460), (847, 450), (850, 435), (843, 428)], np.int32),
+            "LOCKS_ROI": np.array([(680, 246), (833, 175), (940, 481), (796, 550)], np.int32),
             "DOOR_ROI": np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32),
             "DOOR_CORNER_ROI": np.array([[640.30, 13.22], [659.51, 73.73], [845.86, 9.38]], np.int32),
             "STANDING_ZONE": np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32),
@@ -94,8 +93,7 @@ STREAMS_CONFIG = [
         "closed_door_reference": "closed_FF-1-CAM-42.jpg",
         "ssim_threshold": 0.88,
         "rois": {
-            "LOCK_A_ROI": np.array([(630, 276), (618, 280), (611, 291), (614, 305), (625, 314), (639, 314), (649, 304), (649, 291), (643, 278)], np.int32),
-            "LOCK_B_ROI": np.array([(665, 497), (655, 503), (652, 515), (655, 527), (666, 532), (678, 530), (685, 519), (686, 506), (679, 496)], np.int32),
+            "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
             "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
             "DOOR_CORNER_ROI": np.array([[423, 33], [420, 11], [442, 3], [620, 1]], np.int32),
             "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
