@@ -21,12 +21,16 @@ class DualAuthStateMachine:
     a raw tracker detection and is ignored by the authorization logic.
     """
 
-    def __init__(self, roi_manager: ROIManager, fps: int = 30, session_id: Optional[str] = None, mirror_left_right: bool = False):
+    def __init__(self, roi_manager: ROIManager, fps: int = 30, session_id: Optional[str] = None,
+                 mirror_left_right: bool = False,
+                 min_unlock_seconds: float = None, max_unlock_seconds: float = None):
         self.roi_manager = roi_manager
         self.fps = max(int(fps or config.DEFAULT_FPS), 1)
-        self.dwell_frames = config.calculate_min_unlock_frames(self.fps)
-        self.min_unlock_frames = self.dwell_frames
-        self.max_unlock_frames = config.calculate_max_unlock_frames(self.fps)
+        _min_s = float(min_unlock_seconds) if min_unlock_seconds is not None else config.MIN_UNLOCK_SECONDS
+        _max_s = float(max_unlock_seconds) if max_unlock_seconds is not None else config.MAX_UNLOCK_SECONDS
+        self.min_unlock_frames = max(1, int(_min_s * self.fps))
+        self.max_unlock_frames = max(self.min_unlock_frames + 1, int(_max_s * self.fps))
+        self.dwell_frames = self.min_unlock_frames
         self.session = config.create_session()
         self.mirror_left_right = mirror_left_right  # True for top-down cameras where L/R appears flipped
 
@@ -147,35 +151,48 @@ class DualAuthStateMachine:
             candidate_id = self.session.get(f"candidate_{slot}")
             timer = self.session.get(f"timer_{slot}_frames", 0)
 
-                # Assigned person: id_a/id_b are FIXED after assignment — never changed here.
-            # Visualization layer handles display remapping via crop-reid independently.
             if assigned_id is not None:
                 if assigned_id in pose_results:
                     interacting_ids.add(assigned_id)
-                    # Refresh last-known bbox while person is directly visible
+                    # Refresh last-known bbox and anchor while directly visible
                     if assigned_id in tracked_persons:
                         bbox = tracked_persons[assigned_id].get("bbox")
                         if bbox is not None:
                             self.last_seen_bbox[slot] = bbox
                 else:
-                    # Person lost from tracker — hold via synthetic entry (grace buffer handles expiry)
-                    print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} not in tracker, synthetic hold")
-                    pose_results[assigned_id] = {
-                        "qualified": True,
-                        "has_lock_contact": False, # Do not trigger interaction logic while untracked
-                        "head_in_interaction": True,
-                        "head_in_door": False,
-                        "shoulders_in_door": False,
-                        "feet_in_standing": True,
-                        "anchor": self.verified_anchors[slot]
-                    }
-                    interacting_ids.add(assigned_id)
+                    # ID lost — attempt strict state-machine ReID before synthetic hold
+                    remapped = self._remap_verified_unlocker(slot, tracked_persons, pose_results)
+                    assigned_id = self.session[f"id_{slot}"]  # re-read in case remapped
+
+                    if remapped and assigned_id in pose_results:
+                        interacting_ids.add(assigned_id)
+                        if assigned_id in tracked_persons:
+                            bbox = tracked_persons[assigned_id].get("bbox")
+                            if bbox is not None:
+                                self.last_seen_bbox[slot] = bbox
+                    else:
+                        # No spatial match — synthetic hold until tracker recovers
+                        print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} not in tracker, synthetic hold")
+                        pose_results[assigned_id] = {
+                            "qualified": True,
+                            "has_lock_contact": False,
+                            "head_in_interaction": True,
+                            "head_in_door": False,
+                            "shoulders_in_door": False,
+                            "shoulder_order_correct": True,
+                            "feet_in_standing": True,
+                            "anchor": self.verified_anchors[slot]
+                        }
+                        interacting_ids.add(assigned_id)
                 continue
 
-            # Candidate: stay qualified if timer started and still tracked
+            # Candidate: only keep in interacting_ids if pose STILL qualifies this frame.
+            # Dropping them here activates the grace buffer in _update_unlock_slot so
+            # brief single-frame lapses are tolerated; sustained pose failure resets timer.
             if candidate_id is not None and timer > 0 and candidate_id in tracked_persons:
-                interacting_ids.add(candidate_id)
-                print(f"[CANDI] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f)")
+                if pose_results.get(candidate_id, {}).get("qualified", False):
+                    interacting_ids.add(candidate_id)
+                    print(f"[CANDI] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f)")
 
         self._refresh_verified_slots(pose_results)
         self.active_ids_in_zone = interacting_ids
@@ -422,9 +439,8 @@ class DualAuthStateMachine:
             "head_in_interaction": False,
             "feet_in_standing": False,
             "waist_near_door": False,      # OPTIONAL — hip inside DOOR_ROI
-            # Ear orientation gate: right ear right, left ear left (mandatory when both visible)
-            "ear_order_correct": False,
-            # in_locks_roi = LW, LE, RW, RL are ALL in LOCKS_ROI
+            "ear_order_correct": False,    # MANDATORY when both ears visible
+            "shoulder_order_correct": False, # MANDATORY when shoulders used for door gate
             "in_locks_roi": False,
             "arms_raised": False,
             "left_right_order": False,
@@ -453,12 +469,7 @@ class DualAuthStateMachine:
         result["arms_raised"] = self._arms_raised_towards_door(keypoints, bbox)
         result["left_right_order"] = self._left_right_keypoints_in_video_order(keypoints)
         result["shoulders_in_door"] = self._shoulders_in_door(keypoints)
-
-        # ── Ear orientation gate ───────────────────────────────────────────────
-        # Right ear must appear to the right, left ear to the left in the video frame.
-        # When both ears visible this is MANDATORY — it confirms the person is correctly
-        # facing/oriented towards the door before any lock interaction is counted.
-        # If only one ear is visible (or neither), we fall back gracefully to True.
+        result["shoulder_order_correct"] = self._shoulder_order_correct(keypoints)
         result["ear_order_correct"] = self._ear_order_correct(keypoints)
 
         # All 4 keypoints must be in LOCKS_ROI simultaneously
@@ -466,13 +477,13 @@ class DualAuthStateMachine:
         result["has_lock_contact"] = result["in_locks_roi"]
 
         # ── Qualification gate ─────────────────────────────────────────────────
-        # MANDATORY : head_in_interaction, ear_order_correct, in_locks_roi, arms_raised
-        # OPTIONAL  : feet_in_standing  — standing zone may be occluded by objects
-        #           : left_right_order  — low-confidence ankles on top-down cameras
-        #           : waist_near_door   — hip inside DOOR_ROI; top-down view distorts hips
+        # MANDATORY : in_locks_roi, (head_in_door OR (shoulders_in_door AND shoulder_order_correct)),
+        #             ear_order_correct, arms_raised
+        # OPTIONAL  : feet_in_standing, left_right_order, waist_near_door
         if result["in_locks_roi"]:
+            shoulders_ok = result["shoulders_in_door"] and result["shoulder_order_correct"]
             result["qualified"] = (
-                (result["head_in_door"] or result["shoulders_in_door"])
+                (result["head_in_door"] or shoulders_ok)
                 and result["ear_order_correct"]
                 and result["arms_raised"]
             )
@@ -490,12 +501,14 @@ class DualAuthStateMachine:
             if not result["waist_near_door"]:
                 optional_notes.append("waist_not_near_door")
             note = f" (optional skipped: {', '.join(optional_notes)})" if optional_notes else ""
-            print(f"[POSE]{id_tag} Qualified: ears✓ in_locks✓ head✓ arms✓{note}")
+            print(f"[POSE]{id_tag} Qualified: ears✓ shoulders✓ in_locks✓ head✓ arms✓{note}")
         else:
             failed = []
             if not result["ear_order_correct"]:
                 failed.append("ear_order_wrong")
-            if not (result["head_in_door"] or result["shoulders_in_door"]):
+            if not result["shoulder_order_correct"] and result["shoulders_in_door"]:
+                failed.append("shoulder_order_wrong")
+            if not (result["head_in_door"] or (result["shoulders_in_door"] and result["shoulder_order_correct"])):
                 failed.append("not_in_door_roi")
             if not result["in_locks_roi"]:
                 failed.append("not_in_locks_roi")
@@ -647,17 +660,45 @@ class DualAuthStateMachine:
         return float(x), float(y)
 
     def _shoulders_in_door(self, keypoints: np.ndarray) -> bool:
-        """Check if either shoulder keypoint is inside DOOR_ROI."""
-        left_shoulder = self._visible_keypoint(keypoints, config.KEYPOINT_SHOULDER_LEFT)
+        """Position only: True if either shoulder keypoint is inside DOOR_ROI."""
+        left_shoulder  = self._visible_keypoint(keypoints, config.KEYPOINT_SHOULDER_LEFT)
+        right_shoulder = self._visible_keypoint(keypoints, config.KEYPOINT_SHOULDER_RIGHT)
+        if left_shoulder and self.roi_manager.point_in_roi("DOOR_ROI", left_shoulder[0], left_shoulder[1]):
+            return True
+        if right_shoulder and self.roi_manager.point_in_roi("DOOR_ROI", right_shoulder[0], right_shoulder[1]):
+            return True
+        return False
+
+    def _shoulder_order_correct(self, keypoints: np.ndarray) -> bool:
+        """Orientation only: right shoulder RIGHT, left shoulder LEFT in video frame.
+
+        Both visible  → enforce relative order with LEFT_RIGHT_ORDER_MIN_PIXELS margin.
+        One visible   → enforce absolute side using head center as person midline.
+        Neither       → True (graceful fallback, can't determine).
+        """
+        left_shoulder  = self._visible_keypoint(keypoints, config.KEYPOINT_SHOULDER_LEFT)
         right_shoulder = self._visible_keypoint(keypoints, config.KEYPOINT_SHOULDER_RIGHT)
 
-        if left_shoulder:
-            if self.roi_manager.point_in_roi("DOOR_ROI", left_shoulder[0], left_shoulder[1]):
-                return True
-        if right_shoulder:
-            if self.roi_manager.point_in_roi("DOOR_ROI", right_shoulder[0], right_shoulder[1]):
-                return True
-        return False
+        if left_shoulder is None and right_shoulder is None:
+            return True  # no shoulders visible → don't block
+
+        # Both visible → relative order
+        if left_shoulder is not None and right_shoulder is not None:
+            if self.mirror_left_right:
+                return left_shoulder[0] > right_shoulder[0] + config.LEFT_RIGHT_ORDER_MIN_PIXELS
+            else:
+                return left_shoulder[0] < right_shoulder[0] - config.LEFT_RIGHT_ORDER_MIN_PIXELS
+
+        # Single shoulder → absolute side using head midline
+        head_pos = self._get_head_position(keypoints)
+        if head_pos is None:
+            return True  # no reference → don't block
+
+        mid_x = head_pos[0]
+        if right_shoulder is not None:
+            return right_shoulder[0] > mid_x if not self.mirror_left_right else right_shoulder[0] < mid_x
+        else:
+            return left_shoulder[0] < mid_x if not self.mirror_left_right else left_shoulder[0] > mid_x
 
     def _point_in_or_near_roi(self, roi_name: str, point: Tuple[float, float], threshold: float) -> bool:
         x, y = point
@@ -840,6 +881,85 @@ class DualAuthStateMachine:
                 pose_results[assigned_id]["qualified"] = True
                 pose_results[assigned_id]["occlusion_mode"] = True
                 print(f"[OCCLUSION] P{1 if slot == 'a' else 2} fallback qualified")
+
+    # ================================================================
+    # VERIFIED UNLOCKER ReID (state-machine level)
+    # ================================================================
+    def _remap_verified_unlocker(self, slot: str, tracked_persons: Dict, pose_results: Dict) -> bool:
+        """
+        When a verified unlocker's ID is lost, find the best spatial match in
+        tracked_persons and re-assign session["id_slot"] to that ID.
+
+        Matching criteria (strict):
+          1. Anchor distance ≤ UNLOCKER_ANCHOR_MATCH_PIXELS × 3 (285px)
+          2. Bbox height within 40% of last seen bbox
+          3. Not the other verified unlocker's ID or tagged with other slot
+
+        Returns True if re-assignment was made.
+        """
+        id_key = f"id_{slot}"
+        current_id = self.session.get(id_key)
+        anchor = self.verified_anchors[slot]
+        ref_bbox = self.last_seen_bbox[slot]
+
+        if current_id is None or anchor is None:
+            return False
+
+        other_slot = "b" if slot == "a" else "a"
+        other_id = self.session.get(f"id_{other_slot}")
+        other_tag = f"P{2 if slot == 'a' else 1}_unlocker"
+
+        search_radius = config.UNLOCKER_ANCHOR_MATCH_PIXELS * 3  # 285px
+        best_id = None
+        best_dist = search_radius
+        best_bbox = None
+        best_anchor = None
+
+        for tid, person in tracked_persons.items():
+            if tid == current_id:
+                continue
+            if tid == other_id:
+                continue
+            if self.unlocker_tags.get(tid) == other_tag:
+                continue
+
+            bbox = person.get("bbox")
+            if bbox is None:
+                continue
+
+            # Bbox size gate
+            if ref_bbox is not None:
+                ref_h = float(ref_bbox[3] - ref_bbox[1])
+                cand_h = float(bbox[3] - bbox[1])
+                if ref_h > 0 and abs(cand_h - ref_h) / ref_h > 0.4:
+                    continue
+
+            keypoints = person.get("keypoints")
+            head_pos = self._get_head_position(keypoints) if keypoints is not None else None
+            base_pos = self._get_base_position(keypoints, bbox) if keypoints is not None else self._bbox_bottom_center(bbox)
+            cand_anchor = self._person_anchor(keypoints, bbox, head_pos, base_pos) if keypoints is not None else self._bbox_bottom_center(bbox)
+
+            dist = self._anchor_distance(anchor, cand_anchor)
+            if dist < best_dist:
+                best_dist = dist
+                best_id = tid
+                best_bbox = bbox
+                best_anchor = cand_anchor
+
+        if best_id is None:
+            return False
+
+        old_id = current_id
+        self.session[id_key] = best_id
+        self.assign_unlocker_tag(best_id, slot)
+        if best_bbox is not None:
+            self.last_seen_bbox[slot] = best_bbox
+        if best_anchor is not None:
+            self.verified_anchors[slot] = self._smooth_anchor(anchor, best_anchor)
+
+        print(f"[REID-SM] P{1 if slot == 'a' else 2} verified unlocker: ID {old_id} → {best_id} "
+              f"(dist={best_dist:.1f}px)")
+        return True
 
     # ================================================================
     # UNLOCKER TAGGING (Redundant ID tracking per person)

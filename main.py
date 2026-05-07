@@ -355,11 +355,30 @@ def main(
         active_rois = setup_rois(roi_manager, stream_config["rois"], width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
         try:
-            stream_ssim_thresh = stream_config.get("ssim_threshold", config.SSIM_THRESHOLD)
+            # Read per-stream tuning (fall back to safe production defaults)
+            stream_ssim_thresh = float(stream_config.get("ssim_threshold", config.SSIM_THRESHOLD))
+            stream_intensity_thresh = stream_config.get("intensity_threshold", None)
+            stream_motion_thresh = stream_config.get("motion_threshold", None)
+            stream_debounce = int(stream_config.get("debounce_threshold", config.DOOR_DEBOUNCE_FRAMES))
+
+            # Basic validation / clamping to avoid accidental misconfiguration
+            stream_ssim_thresh = min(max(stream_ssim_thresh, 0.5), 0.99)
+            if stream_intensity_thresh is not None:
+                stream_intensity_thresh = float(max(stream_intensity_thresh, 0.0))
+            if stream_motion_thresh is not None:
+                stream_motion_thresh = float(max(stream_motion_thresh, 0.0))
+            stream_debounce = int(min(max(stream_debounce, 1), 600))
+
+            stream_darkening = stream_config.get("darkening_protection", config.DOOR_DARKENING_PROTECTION)
+
             door_verifier = DoorVerifier(
                 stream_config["closed_door_reference"],
                 door_corner_roi=active_rois["DOOR_CORNER_ROI"],
-                similarity_threshold=stream_ssim_thresh
+                similarity_threshold=stream_ssim_thresh,
+                debounce_threshold=stream_debounce,
+                intensity_threshold=stream_intensity_thresh,
+                motion_threshold=stream_motion_thresh,
+                darkening_protection=bool(stream_darkening),
             )
             print(f"[SYSTEM] Door verifier loaded with threshold {stream_ssim_thresh}")
         except FileNotFoundError as e:
@@ -367,7 +386,22 @@ def main(
             door_verifier = None
 
         mirror_lr = stream_config.get("mirror_left_right", False)
-        state_machine = DualAuthStateMachine(roi_manager, int(fps), mirror_left_right=mirror_lr)
+
+        # Per-stream unlock timing — stream value takes full priority over global default
+        _has_min = "min_unlock_seconds" in stream_config
+        _has_max = "max_unlock_seconds" in stream_config
+        stream_min_unlock = float(stream_config["min_unlock_seconds"]) if _has_min else float(config.MIN_UNLOCK_SECONDS)
+        stream_max_unlock = float(stream_config["max_unlock_seconds"]) if _has_max else float(config.MAX_UNLOCK_SECONDS)
+        print(f"[SYSTEM] Lock interaction window: "
+              f"min={stream_min_unlock}s ({'stream' if _has_min else 'global default'}), "
+              f"max={stream_max_unlock}s ({'stream' if _has_max else 'global default'})")
+
+        state_machine = DualAuthStateMachine(
+            roi_manager, int(fps),
+            mirror_left_right=mirror_lr,
+            min_unlock_seconds=stream_min_unlock,
+            max_unlock_seconds=stream_max_unlock,
+        )
         visualizer = Visualizer()
         alert_system = AlertSystem(evidence_dir=evidence_dir)
 
@@ -424,11 +458,22 @@ def main(
             cv2.namedWindow(f"Two-Man Rule Live ROI Debug - {cam_id}", cv2.WINDOW_NORMAL)
 
         print("[SYSTEM] Starting frame processing loop...")
+        t_loop_start = time.perf_counter()
+        processed_frames_count = 0
 
         while True:
-            ret, frame = video.read_frame()
+            # Wait for latest frame from background thread
+            ret, frame = video.read_frame(block=True, timeout=0.1)
+            
             if not ret:
+                # Stream is dead
+                if stream_config.get("camera_id"):
+                    print(f"[SYSTEM] Stream {stream_config['camera_id']} died. Exiting for restart.")
                 break
+            
+            if frame is None:
+                # Timeout reached or no frame yet; skip this beat
+                continue
 
             clean_frame = frame.copy()
             frame_idx += 1
@@ -529,6 +574,18 @@ def main(
                 else:
                     door_transition_pending = False
                 inference_ms = (time.perf_counter() - t0) * 1000.0
+                processed_frames_count += 1
+                
+                # Periodic Telemetry Logging (Production Metrics)
+                if frame_idx % 150 == 0:
+                    elapsed = time.perf_counter() - t_loop_start
+                    actual_fps = processed_frames_count / elapsed if elapsed > 0 else 0
+                    telemetry = video.get_telemetry()
+                    print(f"[METRICS] {cam_id} | FPS: {actual_fps:.1f} | AI: {inference_ms:.1f}ms | "
+                          f"Queue Delay: {telemetry['queue_delay_ms']:.1f}ms | Drops: {telemetry['dropped_frames']}")
+                    # Reset counters periodically
+                    t_loop_start = time.perf_counter()
+                    processed_frames_count = 0
 
             # ===== VISUALIZATION =====
             draw_rois(visualizer, frame, active_rois)
@@ -922,7 +979,9 @@ if __name__ == "__main__":
             processes = []
             
             base_cmd = [sys.executable, sys.argv[0]]
-            if args.show: base_cmd.append("--show")
+            if args.show: 
+                print("[WARNING] --show enabled. OpenCV GUI rendering adds significant CPU/latency overhead and is NOT recommended for production.")
+                base_cmd.append("--show")
             if args.scale_rois: base_cmd.append("--scale-rois")
             base_cmd.extend(["--process-every", str(args.process_every)])
             base_cmd.extend(["--device", args.device])
@@ -934,16 +993,35 @@ if __name__ == "__main__":
             for i in range(len(config.STREAMS_CONFIG)):
                 cmd = base_cmd + ["--stream-index", str(i)]
                 p = subprocess.Popen(cmd)
-                processes.append(p)
+                processes.append((p, cmd, i))
                 print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
                 
+                # Staggered Startup (Production Safety)
+                if i < len(config.STREAMS_CONFIG) - 1:
+                    delay = getattr(config, "STAGGER_START_DELAY", 2.0)
+                    print(f"[SYSTEM] Waiting {delay}s before next launch...")
+                    time.sleep(delay)
+                
+            print("[SYSTEM] All streams launched. Supervisor active.")
             try:
-                for p in processes:
-                    p.wait()
+                while True:
+                    time.sleep(5)
+                    # Watchdog / Supervisor logic
+                    for idx, (p, cmd, s_idx) in enumerate(processes):
+                        if p.poll() is not None:
+                            print(f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died with code {p.returncode}. Restarting...")
+                            new_p = subprocess.Popen(cmd)
+                            processes[idx] = (new_p, cmd, s_idx)
+                            print(f"[WATCHDOG] Stream {s_idx} restarted (New PID: {new_p.pid})")
             except KeyboardInterrupt:
                 print("\n[SYSTEM] Shutting down all streams...")
-                for p in processes:
+                for p, _, _ in processes:
                     p.terminate()
+                    try:
+                        p.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        print(f"[SYSTEM] Force killing PID {p.pid}")
+                        p.kill()
             sys.exit(0)
 
     if args.stream_index < 0 or args.stream_index >= len(config.STREAMS_CONFIG):

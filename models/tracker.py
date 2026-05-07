@@ -5,164 +5,191 @@ from typing import Dict, List, Tuple, Optional
 import config
 
 class PersonTracker:
-    """Enhanced ByteTrack with pose-based ReID for persistent ID assignment (StrongSORT-like)."""
+    """Enhanced ByteTrack with pose-based ReID: spatial gate + normalized distance."""
 
     def __init__(self):
-        """Initialize ByteTrack with ReID embedding history."""
         self.tracker = ByteTrack(
             lost_track_buffer=config.TRACK_BUFFER,
             track_activation_threshold=config.TRACK_THRESH
         )
-        self.tracked_persons = {}  # track_id -> person_data
-        # ReID history: track_id -> list of recent pose embeddings
+        self.tracked_persons = {}
         self.reid_history = {}
-        self.reid_max_history = 15  # Keep last 15 embeddings (e.g. 0.5s at 30fps) per track
-        self.aliases = {}  # ByteTrack ID -> ReID mapped ID
-        self.lost_id_frames = {}  # track_id -> frames since last seen
-        self.max_lost_frames = config.TRACK_BUFFER  # Purge after this many frames (from config)
+        self.reid_max_history = 15
+        self.aliases = {}
+        self.lost_id_frames = {}
+        self.max_lost_frames = config.TRACK_BUFFER
+        self.last_known_bbox = {}  # true_id → last confirmed bbox
 
-    def _compute_keypoint_distance(self, kpts1: np.ndarray, kpts2: np.ndarray) -> float:
-        """Compute average Euclidean distance between corresponding visible actual keypoints."""
+    def _compute_keypoint_distance(
+        self, kpts1: np.ndarray, kpts2: np.ndarray, bbox_height: float = None
+    ) -> float:
+        """
+        Normalized mean keypoint distance.
+        Returns distance / bbox_height so threshold is scale-invariant.
+        Requires >= 8 mutually visible keypoints for a reliable match.
+        """
         if kpts1 is None or kpts2 is None:
             return float('inf')
 
-        # kpts: (17, 3) where 3 is (x, y, conf)
-        vis1 = kpts1[:, 2] > 0.3
-        vis2 = kpts2[:, 2] > 0.3
-        mask = vis1 & vis2
-
-        if mask.sum() < 5:  # Need at least 5 common keypoints
+        mask = (kpts1[:, 2] > 0.3) & (kpts2[:, 2] > 0.3)
+        if np.sum(mask) < 8:
             return float('inf')
 
-        diff = kpts1[mask, :2] - kpts2[mask, :2]
-        dists = np.linalg.norm(diff, axis=1)
-        return float(np.mean(dists))
+        dists = np.sqrt(np.sum((kpts1[mask, :2] - kpts2[mask, :2])**2, axis=1))
+        raw_dist = float(np.mean(dists))
+
+        if bbox_height and bbox_height > 0:
+            return raw_dist / bbox_height
+        return float('inf')  # no scale info → refuse to match
 
     def _average_keypoints(self, history: List[np.ndarray]) -> np.ndarray:
-        """Create a single template keypoints array from a history of frames."""
+        """Vectorized averaging of keypoint history."""
+        if not history:
+            return np.zeros((17, 3), dtype=np.float32)
+
+        hist_arr = np.array(history)  # (N, 17, 3)
         avg_kpts = np.zeros((17, 3), dtype=np.float32)
-
         for i in range(17):
-            valid_pts = []
-            for kpts in history:
-                if kpts is not None and len(kpts) > i and kpts[i, 2] > 0.3:
-                    valid_pts.append(kpts[i, :2])
-
-            if valid_pts:
-                avg_kpts[i, :2] = np.mean(valid_pts, axis=0)
-                avg_kpts[i, 2] = 1.0  # Mark as valid
-            else:
-                avg_kpts[i, 2] = 0.0  # Mark as invalid
-
+            points = hist_arr[:, i, :]
+            mask = points[:, 2] > 0.3
+            if np.any(mask):
+                avg_kpts[i, :2] = np.mean(points[mask, :2], axis=0)
+                avg_kpts[i, 2] = 1.0
         return avg_kpts
 
+    @staticmethod
+    def _bbox_height(bbox) -> float:
+        if bbox is None or len(bbox) < 4:
+            return 0.0
+        return float(bbox[3] - bbox[1])
+
+    @staticmethod
+    def _bbox_center_bottom(bbox) -> Optional[Tuple[float, float]]:
+        if bbox is None or len(bbox) < 4:
+            return None
+        return ((bbox[0] + bbox[2]) / 2.0, float(bbox[3]))
+
     def update(self, detections: List[Dict]) -> Dict[int, Dict]:
-        """
-        Update tracker with ReID-enhanced ByteTrack mapping.
-        """
+        """Update tracker with one-to-one assignment and spatial-gated ReID."""
         if not detections:
             return {}
 
-        bboxes = np.array([d["bbox"] for d in detections])
+        det_bboxes = np.array([d["bbox"] for d in detections])
         confidences = np.array([d["confidence"] for d in detections])
 
         sup_detections = Detections(
-            xyxy=bboxes,
+            xyxy=det_bboxes,
             confidence=confidences,
-            class_id=np.zeros(len(bboxes), dtype=int)
+            class_id=np.zeros(len(det_bboxes), dtype=int)
         )
 
-        # Run ByteTrack
         tracked_dets = self.tracker.update_with_detections(sup_detections)
-
         current_tracked_ids = set()
         det_by_b_id = {}
 
-        # 1. Match ByteTrack output back to original detections (for keypoints)
-        for i in range(len(tracked_dets)):
-            b_id_int = int(tracked_dets.tracker_id[i])
-            t_box = tracked_dets.xyxy[i]
+        if len(tracked_dets) > 0:
+            track_bboxes = tracked_dets.xyxy
 
-            best_det = None
-            best_dist = float('inf')
-            for d in detections:
-                d_box = d["bbox"]
-                # Match by top-left coordinate distance
-                dist = np.linalg.norm(np.array(t_box[:2]) - np.array(d_box[:2]))
-                if dist < best_dist:
-                    best_dist = dist
-                    best_det = d
+            # Use bbox center distance (more stable than top-left corner)
+            track_centers = np.stack([
+                (track_bboxes[:, 0] + track_bboxes[:, 2]) / 2,
+                (track_bboxes[:, 1] + track_bboxes[:, 3]) / 2,
+            ], axis=1)
+            det_centers = np.stack([
+                (det_bboxes[:, 0] + det_bboxes[:, 2]) / 2,
+                (det_bboxes[:, 1] + det_bboxes[:, 3]) / 2,
+            ], axis=1)
 
-            if best_det is None:
-                continue
+            dists = np.linalg.norm(
+                track_centers[:, None, :] - det_centers[None, :, :], axis=2
+            )  # (T, D)
 
-            # Resolve Alias
-            true_id = self.aliases.get(b_id_int, b_id_int)
-            det_by_b_id[b_id_int] = (true_id, best_det)
-            current_tracked_ids.add(true_id)
+            # Greedy one-to-one assignment: closest track claims detection first
+            used_det = set()
+            best_det_indices = {}
+            for i in np.argsort(dists.min(axis=1)):
+                for det_idx in np.argsort(dists[i]):
+                    if det_idx not in used_det:
+                        best_det_indices[int(i)] = int(det_idx)
+                        used_det.add(det_idx)
+                        break
 
-        # 2. ReID verification for "Lost" IDs (Tracks in history but missing from current scene)
-        lost_ids = [tid for tid in self.reid_history.keys() if tid not in current_tracked_ids]
+            for i in range(len(tracked_dets)):
+                det_idx = best_det_indices.get(i)
+                if det_idx is None:
+                    continue
+                b_id_int = int(tracked_dets.tracker_id[i])
+                true_id = self.aliases.get(b_id_int, b_id_int)
+                det_by_b_id[b_id_int] = (true_id, detections[det_idx])
+                current_tracked_ids.add(true_id)
 
+        # ── ReID: fires immediately (same frame) when ByteTrack drops an ID ──
+        lost_ids = [tid for tid in self.reid_history if tid not in current_tracked_ids]
         for lost_id in lost_ids:
-            # Increment lost counter
             self.lost_id_frames[lost_id] = self.lost_id_frames.get(lost_id, 0) + 1
-
-            # If person is gone for too long, purge fingerprint to avoid false matches later
             if self.lost_id_frames[lost_id] > self.max_lost_frames:
-                if lost_id in self.reid_history:
-                    del self.reid_history[lost_id]
-                if lost_id in self.lost_id_frames:
-                    del self.lost_id_frames[lost_id]
+                self.reid_history.pop(lost_id, None)
+                self.lost_id_frames.pop(lost_id, None)
+                self.last_known_bbox.pop(lost_id, None)
                 continue
 
             history = self.reid_history[lost_id]
             if not history:
                 continue
 
-            lost_template_kpts = self._average_keypoints(history)
+            lost_template = self._average_keypoints(history)
+            last_bbox = self.last_known_bbox.get(lost_id)
+            last_h = self._bbox_height(last_bbox)
+            last_center = self._bbox_center_bottom(last_bbox)
 
-            best_b_id = None
-            # Threshold: maximum average pixel distance to be considered the same person
-            best_dist = 150.0
+            # Spatial gate: candidate foot must be within 2× body-heights of last position.
+            # Grows slightly each lost frame to handle slow drift.
+            frames_lost = self.lost_id_frames[lost_id]
+            spatial_limit = max(last_h * 2.0, 200.0) + frames_lost * 8.0
 
-            # Check all persons in the full scene to see if anyone matches this STICKY fingerprint
+            # Normalized threshold: mean keypoint displacement ≤ 35% of body height.
+            # Scale-invariant — works for near and far cameras.
+            NORM_THRESH = 0.35
+
+            best_b_id, best_dist = None, NORM_THRESH
+
             for b_id_int, (true_id, det) in det_by_b_id.items():
-                # Don't try to assign the same ID to two different people
                 if true_id == lost_id:
                     continue
 
-                curr_kpts = det.get("keypoints")
-                dist = self._compute_keypoint_distance(lost_template_kpts, curr_kpts)
+                # Spatial gate — skip candidate if far from where the person was last seen
+                if last_center is not None:
+                    cand_bbox = det.get("bbox")
+                    if cand_bbox is not None:
+                        cx = (cand_bbox[0] + cand_bbox[2]) / 2.0
+                        cy = float(cand_bbox[3])
+                        if np.sqrt((cx - last_center[0])**2 + (cy - last_center[1])**2) > spatial_limit:
+                            continue
 
+                cand_h = self._bbox_height(det.get("bbox"))
+                ref_h = max(last_h, cand_h) if (last_h > 0 and cand_h > 0) else None
+                dist = self._compute_keypoint_distance(lost_template, det.get("keypoints"), ref_h)
                 if dist < best_dist:
-                    best_dist = dist
-                    best_b_id = b_id_int
+                    best_dist, best_b_id = dist, b_id_int
 
             if best_b_id is not None:
-                # We found someone near the lost ID's location! Reassign ID.
-                # Remove alias from old ID and set to lost_id
                 old_true_id = det_by_b_id[best_b_id][0]
-
-                print(f"[REID] ID RESTORE: Lost ID {lost_id} found! Reassigning Scene ID {old_true_id} -> {lost_id} (dist={best_dist:.1f}px)")
-
+                print(f"[REID] RESTORE: {old_true_id} -> {lost_id} "
+                      f"(norm_dist={best_dist:.3f}, lost_frames={frames_lost})")
                 self.aliases[best_b_id] = lost_id
                 det_by_b_id[best_b_id] = (lost_id, det_by_b_id[best_b_id][1])
-
-                # Reset lost counter for recovered ID
                 self.lost_id_frames[lost_id] = 0
                 current_tracked_ids.add(lost_id)
-                if old_true_id in current_tracked_ids and old_true_id != lost_id:
-                    current_tracked_ids.remove(old_true_id)
 
-        # 3. Finalize and Store Keypoint Arrays (Last stack of arrays)
+        # Finalize: store keypoints + last bbox for every confirmed track
         new_tracked = {}
         for b_id_int, (true_id, det) in det_by_b_id.items():
-            person_data = {**det, "track_id": true_id}
-            new_tracked[true_id] = person_data
-
-            # Reset lost counter since they are active
+            new_tracked[true_id] = {**det, "track_id": true_id}
             self.lost_id_frames[true_id] = 0
+
+            bbox = det.get("bbox")
+            if bbox is not None:
+                self.last_known_bbox[true_id] = bbox
 
             curr_kpts = det.get("keypoints")
             if curr_kpts is not None:

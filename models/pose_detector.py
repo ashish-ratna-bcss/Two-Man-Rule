@@ -1,15 +1,15 @@
 # models/pose_detector.py
 from ultralytics import YOLO
 import numpy as np
+import torch
 from typing import List, Dict, Tuple, Optional
 import config
 
 class PoseDetector:
-    """YOLOv8-Pose wrapper for skeleton detection."""
+    """YOLOv8-Pose wrapper optimized for production CUDA environments."""
 
     def __init__(self, model_path: str = None, device: str = "auto", half: bool = True):
-        """Load YOLOv8-Pose model on GPU if available."""
-        import torch
+        """Load YOLOv8-Pose model with warmup and memory optimizations."""
         model_path = model_path or config.YOLO_POSE_MODEL
         if device == "auto":
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -20,66 +20,94 @@ class PoseDetector:
                 self.device = "cpu"
 
         self.use_half = bool(half and self.device == "cuda")
+        
         if self.device == "cuda":
+            # Enable cuDNN autotuner for production performance stability
             torch.backends.cudnn.benchmark = True
+            
+            # Optional memory fraction limit (Production Safety)
+            if hasattr(config, "MAX_PROCESS_VRAM_FRACTION") and config.MAX_PROCESS_VRAM_FRACTION is not None:
+                try:
+                    torch.cuda.set_per_process_memory_fraction(config.MAX_PROCESS_VRAM_FRACTION, 0)
+                    print(f"[PoseDetector] Memory fraction limited to {config.MAX_PROCESS_VRAM_FRACTION}")
+                except Exception as e:
+                    print(f"[WARNING] Could not set memory fraction: {e}")
 
-        print(f"[PoseDetector] Device: {self.device}")
-        if self.device == 'cuda':
-            print(f"[PoseDetector] GPU: {torch.cuda.get_device_name(0)}")
-            print(f"[PoseDetector] Half precision: {self.use_half}")
         self.model = YOLO(model_path)
-        self.model.to(self.device)  # Move model weights to GPU
-        print(f"[PoseDetector] Model loaded on {self.device}")
+        self.model.to(self.device)
+        print(f"[PoseDetector] Model loaded on {self.device} (Half={self.use_half})")
+        
+        # Warmup Phase (Production Stability)
+        # Prevents first-inference latency spikes and initializes allocator pools
+        if self.device == 'cuda':
+            print("[PoseDetector] Starting warmup...")
+            try:
+                with torch.inference_mode():
+                    dummy_input = torch.zeros((1, 3, 640, 640), device=self.device)
+                    if self.use_half: dummy_input = dummy_input.half()
+                    for _ in range(3):
+                        self.model(dummy_input, verbose=False)
+                torch.cuda.synchronize()
+                print("[PoseDetector] Warmup complete.")
+            except Exception as e:
+                print(f"[WARNING] Warmup failed: {e}")
+
         self.last_results = None
 
     def detect(self, frame: np.ndarray) -> List[Dict]:
         """
-        Run pose detection on frame using GPU.
-
-        Returns:
-            List of detections: [
-                {
-                    "bbox": [x1, y1, x2, y2],
-                    "confidence": float,
-                    "keypoints": np.array([[x, y, conf], ...], shape=(17, 3)),
-                    "keypoint_names": ["nose", "left_eye", ...]
-                },
-                ...
-            ]
+        Run pose detection with inference_mode and OOM recovery.
         """
-        results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
+        try:
+            with torch.inference_mode():
+                results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
+            return self._process_results(results)
+        except torch.cuda.OutOfMemoryError:
+            print("[ERROR] CUDA OOM Detected! Attempting recovery...")
+            torch.cuda.empty_cache()
+            # Retry once after clearing cache
+            try:
+                with torch.inference_mode():
+                    results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
+                return self._process_results(results)
+            except Exception as e:
+                print(f"[CRITICAL] Recovery failed: {e}")
+                return []
+        except Exception as e:
+            print(f"[ERROR] Inference failed: {e}")
+            return []
+
+    def _process_results(self, results) -> List[Dict]:
+        """Convert YOLO results to lightweight detection dictionaries."""
         detections = []
+        if not results or len(results) == 0:
+            return detections
 
-        if results and len(results) > 0:
-            result = results[0]
+        result = results[0]
+        if result.boxes is not None and result.keypoints is not None:
+            # Batch CPU transfers to minimize sync points
+            boxes_xyxy = result.boxes.xyxy.cpu().numpy()
+            boxes_conf = result.boxes.conf.cpu().numpy()
+            kpts_xy = result.keypoints.xy.cpu().numpy()
+            kpts_conf = result.keypoints.conf.cpu().numpy()
 
-            # Iterate over detected persons
-            if result.boxes is not None and result.keypoints is not None:
-                for i, (box, kpts) in enumerate(zip(result.boxes, result.keypoints)):
-                    bbox = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
-                    conf = float(box.conf[0].cpu().numpy())
+            for i in range(len(boxes_xyxy)):
+                kpt_array = np.hstack([
+                    kpts_xy[i],
+                    kpts_conf[i].reshape(-1, 1)
+                ])
 
-                    # Keypoints shape: (17, 3) - [x, y, confidence]
-                    keypoints = kpts.xy[0].cpu().numpy()  # First (x, y) pairs
-                    confidences = kpts.conf[0].cpu().numpy()  # Confidence for each
-
-                    # Combine into (17, 3) array
-                    kpt_array = np.hstack([
-                        keypoints,
-                        confidences.reshape(-1, 1)
-                    ])
-
-                    detections.append({
-                        "bbox": bbox,
-                        "confidence": conf,
-                        "keypoints": kpt_array,  # (17, 3)
-                        "keypoint_names": [
-                            "nose", "left_eye", "right_eye", "left_ear", "right_ear",
-                            "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
-                            "left_wrist", "right_wrist", "left_hip", "right_hip",
-                            "left_knee", "right_knee", "left_ankle", "right_ankle"
-                        ]
-                    })
+                detections.append({
+                    "bbox": boxes_xyxy[i],
+                    "confidence": float(boxes_conf[i]),
+                    "keypoints": kpt_array,
+                    "keypoint_names": [
+                        "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+                        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+                        "left_wrist", "right_wrist", "left_hip", "right_hip",
+                        "left_knee", "right_knee", "left_ankle", "right_ankle"
+                    ]
+                })
 
         self.last_results = detections
         return detections

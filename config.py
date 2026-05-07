@@ -4,13 +4,13 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
-MORNING_POST_OPEN_AUTH_SECONDS = 10.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
+MORNING_POST_OPEN_AUTH_SECONDS = 6.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
                                         # Increased from 5s to allow the A→B sequential gate to complete
                                         # (both wrists on LOCK_A, then both wrists on LOCK_B) before timeout.
 
 # ============ TIMERS (in seconds) ============
-# One valid key-turn/unlock interaction must last at least 6s and no more than 10s.
-MIN_UNLOCK_SECONDS = 6.0
+# One valid key-turn/unlock interaction must last at least 5s and no more than 10s.
+MIN_UNLOCK_SECONDS = 5.0
 MAX_UNLOCK_SECONDS = 10.0
 EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS = 300.0
 
@@ -53,6 +53,10 @@ PROGRESS_BAR_THICKNESS = 3
 
 # ============ SSIM & DOOR VERIFICATION ============
 SSIM_THRESHOLD = 0.92
+# Default debounce (frames) required to accept a door state change
+DOOR_DEBOUNCE_FRAMES = 20
+# Global toggle to enable special darkening (lights-off) protection
+DOOR_DARKENING_PROTECTION = True
 
 # ============ ALERT SYSTEM ============
 
@@ -68,6 +72,11 @@ TRACK_THRESH = 0.5
 YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 
 # ============ STREAMS & ORCHESTRATION CONFIG ============
+# Optimization & Production Flags
+RTSP_LOW_LATENCY = True
+STAGGER_START_DELAY = 2.0  # Seconds between stream launches
+MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
+
 STREAMS_CONFIG = [
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8001/Streaming/Channels/4001",
@@ -76,6 +85,11 @@ STREAMS_CONFIG = [
         "site_name": "somajiguda",
         "closed_door_reference": "closed_GF-1-CAM-40.jpg",
         "ssim_threshold": 0.92,
+        "debounce_threshold": 20,
+        "intensity_threshold": 35,
+        "motion_threshold": 6.0,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
         "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
             "LOCKS_ROI": np.array([(627, 252), (905, 129), (996, 469), (750, 588)], np.int32),
@@ -91,7 +105,13 @@ STREAMS_CONFIG = [
         "site_id": "1",
         "site_name": "somajiguda",
         "closed_door_reference": "closed_FF-1-CAM-42.jpg",
-        "ssim_threshold": 0.88,
+        "ssim_threshold": 0.75,
+        "debounce_threshold": 20,
+        # Per-stream light/SSIM tuning (tuned to avoid false OPEN on reflections)
+        "intensity_threshold": 35,  # mean intensity difference to consider lighting change
+        "motion_threshold": 6.0,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
         "rois": {
             "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
             "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
@@ -106,7 +126,14 @@ STREAMS_CONFIG = [
         "site_id": "2",
         "site_name": "Jubliee Hills",
         "closed_door_reference": "closed_GF-2-CAM-21.jpg",
-        "ssim_threshold": 0.92,
+        # Lowered after reviewing live SSIM logs (closed views were ~0.55-0.62)
+        "ssim_threshold": 0.50,
+        "debounce_threshold": 20,
+        # Per-stream light/SSIM tuning (tuned to avoid false OPEN on reflections)
+        "intensity_threshold": 35,
+        "motion_threshold": 6.0,
+        "min_unlock_seconds": 3.0,
+        "max_unlock_seconds": 10.0,
         "rois": {
             "LOCKS_ROI": np.array([(381, 541), (1092, 332), (1134, 830), (545, 1073)], np.int32),
             "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
