@@ -59,8 +59,23 @@ class DualAuthStateMachine:
         self.body_fingerprints = {"a": None, "b": None}
 
         # Last known bbox per slot — updated every frame the person is directly detected
-        # Used to validate anchor-based re-ID candidates (same body size = same person)
+        # Used for live position tracking (search origin for ReID)
         self.last_seen_bbox = {"a": None, "b": None}
+
+        # Bbox frozen at verification time — used as height reference in ReID size gate.
+        # last_seen_bbox can shrink to a partial edge-clip when person goes aside;
+        # using that as height ref would wrongly reject a full-body re-entry.
+        self.slot_height_ref = {"a": None, "b": None}
+
+        # Bbox at the moment the candidate is first picked — used as height reference in
+        # candidate-level _find_matching_track to avoid picking a wrong nearby person.
+        self.candidate_bbox = {"a": None, "b": None}
+
+        # Last known head (x, y) per slot — fallback for interaction-zone check during synthetic hold
+        self.last_seen_head_pos = {"a": None, "b": None}
+
+        # Frames since each verified slot was last directly seen — drives dynamic remap radius
+        self.slot_lost_frames = {"a": 0, "b": 0}
 
         # Per-person sequential lock interaction progress.
         # A tracker ID is only promoted to candidate AFTER
@@ -151,28 +166,69 @@ class DualAuthStateMachine:
             candidate_id = self.session.get(f"candidate_{slot}")
             timer = self.session.get(f"timer_{slot}_frames", 0)
 
+            # Persistent slot tracking: increment lost frames regardless of whether ID is currently assigned.
+            # This allows us to track how long a verified person has been missing.
+            if assigned_id is None and self.verified_anchors[slot] is not None:
+                self.slot_lost_frames[slot] += 1
+                # Attempt recovery for empty verified slot
+                remapped = self._remap_verified_unlocker(slot, tracked_persons, pose_results)
+                if remapped:
+                    assigned_id = self.session[f"id_{slot}"]
+                    self.slot_lost_frames[slot] = 0
+                    interacting_ids.add(assigned_id)
+                    # Recovery successful! Continue to the next slot or process normally.
+                else:
+                    # Still missing — continue to next slot
+                    continue
+
             if assigned_id is not None:
                 if assigned_id in pose_results:
+                    self.slot_lost_frames[slot] = 0  # reset — directly visible this frame
                     interacting_ids.add(assigned_id)
-                    # Refresh last-known bbox and anchor while directly visible
                     if assigned_id in tracked_persons:
                         bbox = tracked_persons[assigned_id].get("bbox")
                         if bbox is not None:
                             self.last_seen_bbox[slot] = bbox
+                        kpts = tracked_persons[assigned_id].get("keypoints")
+                        if kpts is not None:
+                            hp = self._get_head_position(kpts)
+                            if hp is not None:
+                                self.last_seen_head_pos[slot] = hp
                 else:
+                    self.slot_lost_frames[slot] += 1
                     # ID lost — attempt strict state-machine ReID before synthetic hold
                     remapped = self._remap_verified_unlocker(slot, tracked_persons, pose_results)
                     assigned_id = self.session[f"id_{slot}"]  # re-read in case remapped
 
                     if remapped and assigned_id in pose_results:
+                        self.slot_lost_frames[slot] = 0
                         interacting_ids.add(assigned_id)
                         if assigned_id in tracked_persons:
                             bbox = tracked_persons[assigned_id].get("bbox")
                             if bbox is not None:
                                 self.last_seen_bbox[slot] = bbox
                     else:
-                        # No spatial match — synthetic hold until tracker recovers
-                        print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} not in tracker, synthetic hold")
+                        # No spatial match — synthetic hold until tracker recovers or timeout
+                        if self.slot_lost_frames[slot] > config.MAX_SYNTHETIC_HOLD_FRAMES:
+                            print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} lost for too long "
+                                  f"({self.slot_lost_frames[slot]}f). Suspending verified ID.")
+                            self.session[f"id_{slot}"] = None
+                            # DO NOT clear verified_anchors or body_fingerprints — we need them for ReID recovery!
+                            # self.verified_anchors[slot] = None 
+                            # self.slot_lost_frames[slot] = 0 # Keep the count going for ReID radius expansion
+                            
+                            # Reset sequence state appropriately
+                            if slot == "a":
+                                self.session["sequence_state"] = "WAITING_FOR_FIRST_UNLOCKER"
+                            else:
+                                if self.session.get("id_a") is not None:
+                                    self.session["sequence_state"] = "WAITING_FOR_SECOND_UNLOCKER"
+                                else:
+                                    self.session["sequence_state"] = "WAITING_FOR_FIRST_UNLOCKER"
+                            continue
+
+                        print(f"[ASSIGN] P{1 if slot == 'a' else 2} ID {assigned_id} not in tracker, "
+                              f"synthetic hold (lost {self.slot_lost_frames[slot]}f)")
                         pose_results[assigned_id] = {
                             "qualified": True,
                             "has_lock_contact": False,
@@ -225,13 +281,21 @@ class DualAuthStateMachine:
                 self.session["id_a_left_zone"] = True
 
         if self.session["id_a"] is None:
-            self._update_unlock_slot("a", interacting_ids, pose_results, frame_step=frame_step)
+            # Exclude P2 ID and anchor so a dropped P1 slot cannot be filled by the verified P2 person.
+            excl_ids_a = {self.session["id_b"]} if self.session["id_b"] is not None else set()
+            excl_anchors_a = [self.verified_anchors["b"]] if self.verified_anchors["b"] is not None else []
+            self._update_unlock_slot("a", interacting_ids, pose_results,
+                                     excluded_ids=excl_ids_a,
+                                     excluded_anchors=excl_anchors_a,
+                                     tracked_persons=tracked_persons,
+                                     frame_step=frame_step)
         elif self.session["id_b"] is None:
             self._update_unlock_slot(
                 "b",
                 interacting_ids,
                 pose_results,
                 excluded_ids={self.session["id_a"]},
+                tracked_persons=tracked_persons,
                 frame_step=frame_step,
             )
         else:
@@ -244,6 +308,7 @@ class DualAuthStateMachine:
         pose_results: Dict[int, Dict],
         excluded_ids: Optional[Set[int]] = None,
         excluded_anchors: Optional[list] = None,
+        tracked_persons: Optional[Dict] = None,
         frame_step: int = 1
     ):
         excluded_ids = excluded_ids or set()
@@ -268,6 +333,9 @@ class DualAuthStateMachine:
             self.session["sequence_state"] = (
                 "FIRST_UNLOCKER_ACTIVE" if slot == "a" else "SECOND_UNLOCKER_ACTIVE"
             )
+            # Freeze candidate bbox for height gate in _find_matching_track
+            if tracked_persons is not None and candidate_id in tracked_persons:
+                self.candidate_bbox[slot] = tracked_persons[candidate_id].get("bbox")
             print(f"[TIMER] P{1 if slot == 'a' else 2} unlock pose confirmed, ID {candidate_id}")
 
         if candidate_id in excluded_ids:
@@ -282,6 +350,8 @@ class DualAuthStateMachine:
                 pose_results,
                 excluded_ids,
                 excluded_anchors,
+                ref_bbox=self.candidate_bbox[slot],
+                tracked_persons=tracked_persons,
             )
             if remapped_id is not None:
                 print(f"[TRACK] P{1 if slot == 'a' else 2} remapped {candidate_id} → {remapped_id}")
@@ -328,6 +398,8 @@ class DualAuthStateMachine:
         self.session[id_key] = candidate_id
         self.assign_unlocker_tag(candidate_id, slot)
         self.verified_anchors[slot] = self.slot_anchors[slot]
+        if self.last_seen_bbox[slot] is not None:
+            self.slot_height_ref[slot] = self.last_seen_bbox[slot]
         self.session[candidate_key] = None
         self.session[grace_key] = 0
         self.session[timer_key] = min(self.session[timer_key], self.max_unlock_frames)
@@ -346,6 +418,7 @@ class DualAuthStateMachine:
         self.session[f"timer_{slot}_seconds"] = 0.0
         self.session[f"grace_buffer_{slot}"] = 0
         self.slot_anchors[slot] = None
+        self.candidate_bbox[slot] = None
 
     def _reset_all_timers(self):
         self.session.update(config.create_session())
@@ -355,7 +428,10 @@ class DualAuthStateMachine:
         self.unlocker_tags = {}
         self.all_unlocker_ids = {"P1_unlocker": set(), "P2_unlocker": set()}
         self.body_fingerprints = {"a": None, "b": None}
+        self.slot_lost_frames = {"a": 0, "b": 0}
         self.last_seen_bbox = {"a": None, "b": None}
+        self.slot_height_ref = {"a": None, "b": None}
+        self.candidate_bbox = {"a": None, "b": None}
 
 
     def _refresh_verified_slots(self, pose_results: Dict[int, Dict]):
@@ -380,9 +456,12 @@ class DualAuthStateMachine:
             choices.append(track_id)
         return choices
 
-    def _find_matching_track(self, anchor, interacting_ids, pose_results, excluded_ids, excluded_anchors):
+    def _find_matching_track(self, anchor, interacting_ids, pose_results, excluded_ids, excluded_anchors,
+                              ref_bbox=None, tracked_persons=None):
         if anchor is None:
             return None
+
+        ref_h = float(ref_bbox[3] - ref_bbox[1]) if ref_bbox is not None else None
 
         best_id = None
         best_distance = float("inf")
@@ -390,6 +469,16 @@ class DualAuthStateMachine:
             candidate_anchor = pose_results[track_id]["anchor"]
             if self._matches_any_anchor(candidate_anchor, excluded_anchors):
                 continue
+
+            # Height gate: skip if candidate's body height differs >40% from reference.
+            # Prevents wrong-person pick in crowded scenes where two people are near the lock.
+            if ref_h is not None and tracked_persons is not None:
+                cand_bbox = (tracked_persons.get(track_id) or {}).get("bbox")
+                if cand_bbox is not None:
+                    cand_h = float(cand_bbox[3] - cand_bbox[1])
+                    if ref_h > 0 and abs(cand_h - ref_h) / ref_h > 0.4:
+                        continue
+
             distance = self._anchor_distance(anchor, candidate_anchor)
             if distance < best_distance:
                 best_id = track_id
@@ -901,15 +990,32 @@ class DualAuthStateMachine:
         current_id = self.session.get(id_key)
         anchor = self.verified_anchors[slot]
         ref_bbox = self.last_seen_bbox[slot]
+        # Use slot_height_ref (frozen at verification) for size gate so a partial
+        # edge-clip bbox on last_seen_bbox doesn't wrongly reject a full-body re-entry.
+        height_ref_bbox = self.slot_height_ref[slot] or ref_bbox
 
-        if current_id is None or anchor is None:
+        anchor = self.verified_anchors[slot]
+        if anchor is None:
             return False
 
         other_slot = "b" if slot == "a" else "a"
         other_id = self.session.get(f"id_{other_slot}")
         other_tag = f"P{2 if slot == 'a' else 1}_unlocker"
 
-        search_radius = config.UNLOCKER_ANCHOR_MATCH_PIXELS * 3  # 285px
+        # Use last_seen_bbox center-bottom as live search origin.
+        # verified_anchor is frozen at the lock interaction position — after P2 moves
+        # into the room it becomes useless. last_seen_bbox tracks the most recent
+        # confirmed position so the search follows the person's movement.
+        if ref_bbox is not None:
+            search_origin = ((ref_bbox[0] + ref_bbox[2]) / 2.0, float(ref_bbox[3]))
+        else:
+            search_origin = anchor  # fallback when no bbox history yet
+
+        # Radius grows 12px per lost frame so brief occlusion stays tight while
+        # a slow-moving person crossing the doorway gets found after a few frames.
+        frames_lost = self.slot_lost_frames.get(slot, 0)
+        search_radius = min(config.UNLOCKER_ANCHOR_MATCH_PIXELS * 3 + frames_lost * 12, 600)
+
         best_id = None
         best_dist = search_radius
         best_bbox = None
@@ -927,9 +1033,10 @@ class DualAuthStateMachine:
             if bbox is None:
                 continue
 
-            # Bbox size gate
-            if ref_bbox is not None:
-                ref_h = float(ref_bbox[3] - ref_bbox[1])
+            # Bbox size gate — use height_ref_bbox (frozen at verification) so partial
+            # edge-clip frames don't shrink the reference and reject a valid full-body return.
+            if height_ref_bbox is not None:
+                ref_h = float(height_ref_bbox[3] - height_ref_bbox[1])
                 cand_h = float(bbox[3] - bbox[1])
                 if ref_h > 0 and abs(cand_h - ref_h) / ref_h > 0.4:
                     continue
@@ -939,7 +1046,7 @@ class DualAuthStateMachine:
             base_pos = self._get_base_position(keypoints, bbox) if keypoints is not None else self._bbox_bottom_center(bbox)
             cand_anchor = self._person_anchor(keypoints, bbox, head_pos, base_pos) if keypoints is not None else self._bbox_bottom_center(bbox)
 
-            dist = self._anchor_distance(anchor, cand_anchor)
+            dist = math.dist(search_origin, cand_anchor)
             if dist < best_dist:
                 best_dist = dist
                 best_id = tid
@@ -1006,17 +1113,24 @@ class DualAuthStateMachine:
         }
 
     def verified_unlockers_in_interaction_zone(self, tracked_persons: Dict[int, Dict]) -> bool:
-        """Return True only when verified P1 and P2 are both currently visible in INTERACTION_ZONE."""
+        """Return True when verified P1 and P2 are both in INTERACTION_ZONE.
+        Falls back to last_seen_head_pos when tracker drops an ID (e.g. occlusion at doorway)."""
         for slot in ("a", "b"):
             track_id = self.session.get(f"id_{slot}")
-            if track_id is None or track_id not in tracked_persons:
+            if track_id is None:
                 return False
 
-            keypoints = tracked_persons[track_id].get("keypoints")
-            if keypoints is None:
-                return False
+            head_pos = None
+            if track_id in tracked_persons:
+                keypoints = tracked_persons[track_id].get("keypoints")
+                if keypoints is not None:
+                    head_pos = self._get_head_position(keypoints)
 
-            head_pos = self._get_head_position(keypoints)
+            if head_pos is None:
+                # Fallback to last seen head position ONLY if lost very recently (e.g. brief occlusion)
+                if self.slot_lost_frames.get(slot, 0) <= config.MAX_SYNTHETIC_HOLD_FRAMES:
+                    head_pos = self.last_seen_head_pos.get(slot)
+
             if head_pos is None:
                 return False
 

@@ -4,7 +4,7 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
-MORNING_POST_OPEN_AUTH_SECONDS = 6.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
+MORNING_POST_OPEN_AUTH_SECONDS = 7.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
                                         # Increased from 5s to allow the A→B sequential gate to complete
                                         # (both wrists on LOCK_A, then both wrists on LOCK_B) before timeout.
 
@@ -23,6 +23,7 @@ HEAD_CONFIDENCE_THRESHOLD = 0.25
 DOOR_FACING_ARM_RAISE_PIXELS = 30
 LEFT_RIGHT_ORDER_MIN_PIXELS = 25
 UNLOCKER_ANCHOR_MATCH_PIXELS = 95
+MAX_SYNTHETIC_HOLD_FRAMES = 60  # ~2.0s at 30 FPS. Dropped after this if not re-detected.
 
 # ============ POSE KEYPOINT INDICES (YOLOv11) ============
 # Standard COCO format: 0=Nose, 1=L_Eye, 2=R_Eye, ..., 9=L_Wrist, 10=R_Wrist, 15=L_Ankle, 16=R_Ankle
@@ -132,10 +133,10 @@ STREAMS_CONFIG = [
         # Per-stream light/SSIM tuning (tuned to avoid false OPEN on reflections)
         "intensity_threshold": 35,
         "motion_threshold": 6.0,
-        "min_unlock_seconds": 3.0,
+        "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "rois": {
-            "LOCKS_ROI": np.array([(381, 541), (1092, 332), (1134, 830), (545, 1073)], np.int32),
+            "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
             "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
             "DOOR_CORNER_ROI": np.array([[488, 113], [493, 172], [609, 72]], np.int32),
             "STANDING_ZONE": np.array([[688, 1178], [1227, 918], [1420, 1118], [929, 1416]], np.int32),

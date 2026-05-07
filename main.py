@@ -160,13 +160,24 @@ def _label_verified_slot(
     if not candidates:
         return
 
-    # 3. Anchor + size fallback
+    # 3. Live-origin + size fallback
     anchor = state_machine.verified_anchors.get(slot)
     ref_bbox = state_machine.last_seen_bbox.get(slot)
+    height_ref_bbox = (getattr(state_machine, "slot_height_ref", {}).get(slot)) or ref_bbox
     if anchor is None:
         return
 
-    wide_threshold = config.UNLOCKER_ANCHOR_MATCH_PIXELS * 5
+    # Use last_seen_bbox center-bottom as live search origin — follows person movement
+    # verified_anchor stays frozen at lock-area; useless after P2 enters the room
+    if ref_bbox is not None:
+        search_origin = ((ref_bbox[0] + ref_bbox[2]) / 2, float(ref_bbox[3]))
+    else:
+        search_origin = anchor
+
+    # Grow threshold as person is lost longer — catches post-occlusion re-detection
+    frames_lost = state_machine.slot_lost_frames.get(slot, 0)
+    wide_threshold = min(config.UNLOCKER_ANCHOR_MATCH_PIXELS * 5 + frames_lost * 12, 700)
+
     best_dist = float("inf")
     best_tid = None
     best_bbox = None
@@ -177,18 +188,18 @@ def _label_verified_slot(
             continue
         cx = (bbox[0] + bbox[2]) / 2
         cy = float(bbox[3])
-        dist = math.dist((cx, cy), anchor)
+        dist = math.dist((cx, cy), search_origin)
         if dist < best_dist:
             best_dist = dist
             best_tid = tid
             best_bbox = bbox
 
     if best_tid is not None and best_dist <= wide_threshold:
-        if not _bbox_size_matches(ref_bbox, best_bbox, tolerance=0.4):
+        if not _bbox_size_matches(height_ref_bbox, best_bbox, tolerance=0.4):
             return
         labels[best_tid] = f"{slot_label} (remapped ID {primary_id})"
         state_machine.assign_unlocker_tag(best_tid, slot)
-        print(f"[VIZ] {slot_label} anchor-remapped → ID {best_tid} (dist={best_dist:.1f})")
+        print(f"[VIZ] {slot_label} live-remapped → ID {best_tid} (dist={best_dist:.1f}, lost={frames_lost}f)")
 
 
 def get_unlocker_labels(
@@ -212,6 +223,17 @@ def get_unlocker_labels(
     _label_verified_slot("b", "P2 verified", state_machine, tracked_persons, labels, frame)
 
     return labels
+
+
+def draw_lost_verified_ghosts(visualizer: Visualizer, frame: np.ndarray, state_machine: DualAuthStateMachine, unlocker_labels: dict):
+    """Draw ghost anchors for verified persons who are currently lost/unassigned."""
+    for slot in ("a", "b"):
+        if state_machine.session.get(f"id_{slot}") is None:
+            anchor = state_machine.verified_anchors.get(slot)
+            if anchor is not None:
+                # This person was verified but is currently lost
+                label = f"RECOVERING P{1 if slot == 'a' else 2}..."
+                visualizer.draw_ghost_anchor(frame, anchor, label)
 
 
 def draw_pose_debug(frame: np.ndarray, tracked_persons: dict, visible_ids: set):
@@ -564,7 +586,14 @@ def main(
                 is_door_open = False
                 ssim_val = None
                 if door_verifier:
-                    if state_machine.should_check_door_state() or debug:
+                    # In morning window, we must ALWAYS check door state to catch the CLOSED->OPEN transition
+                    # regardless of whether people are blocking the ROI (grace period handles the check).
+                    check_door = (
+                        state_machine.should_check_door_state() 
+                        or (current_auth_window == "morning" and not morning_check_done)
+                        or debug
+                    )
+                    if check_door:
                         is_door_open = door_verifier.verify(frame)
                     else:
                         is_door_open = last_door_state if last_door_state is not None else False
@@ -615,16 +644,31 @@ def main(
                     color = config.COLOR_DETECTED
                 visualizer.draw_bounding_box(frame, person["bbox"], color, label)
             draw_pose_debug(frame, tracked_persons, visible_pose_ids)
+            
+            # Draw ghost anchors for lost verified persons (ReID search markers)
+            draw_lost_verified_ghosts(visualizer, frame, state_machine, unlocker_labels)
 
             # Draw progress bars at lock centers
             locks_center = roi_manager.get_roi_center("LOCKS_ROI")
             if locks_center:
-                pct_a = min((state_machine.session.get("timer_a_seconds", 0) / config.MIN_UNLOCK_SECONDS) * 100, 100)
-                pct_b = min((state_machine.session.get("timer_b_seconds", 0) / config.MIN_UNLOCK_SECONDS) * 100, 100)
-                if pct_a > 0:
-                    visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_a)
-                elif pct_b > 0:
-                    visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_b)
+                id_a_done = state_machine.session.get("id_a") is not None
+                id_b_done = state_machine.session.get("id_b") is not None
+                
+                # Use stream-specific min unlock time for accurate percentage
+                pct_a = min((state_machine.session.get("timer_a_seconds", 0) / stream_min_unlock) * 100, 100)
+                pct_b = min((state_machine.session.get("timer_b_seconds", 0) / stream_min_unlock) * 100, 100)
+                
+                if not id_a_done:
+                    # Show P1 progress if not yet verified
+                    if pct_a > 0:
+                        visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_a)
+                elif not id_b_done:
+                    # Show P2 progress after P1 is verified
+                    if pct_b > 0:
+                        visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_b)
+                else:
+                    # Both verified, show full circle (green)
+                    visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), 100)
 
             # Stable Unlockers Count based on assigned sessions
             n = 0
@@ -699,10 +743,14 @@ def main(
                     evening_auth_started = False
                     print(f"[EVENING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
                 elif current_auth_window == "morning":
-                    persons_auth_status = False
-                    morning_check_done = True
-                    morning_post_open_started = False
-                    print(f"[MORNING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
+                    # In morning window, if we are transitioning to open, we don't exit immediately.
+                    # This allows the post-open grace period to settle and confirm the 2 unlockers.
+                    print(f"[MORNING] Potential SAME_ID violation detected (ID {state_machine.session.get('id_a')}). Waiting for door transition.")
+                    # Only mark as FAILED if the door is already OPEN and we are not in grace period
+                    if is_door_open and not morning_post_open_started:
+                        persons_auth_status = False
+                        morning_check_done = True
+                        print(f"[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
                 
                 state_machine.session["violation_type"] = None
 
@@ -724,11 +772,13 @@ def main(
             last_door_state = is_door_open
 
             # ===== MORNING CHECK (CLOSED -> OPEN) =====
+            # ===== MORNING CHECK (CLOSED -> OPEN) =====
             if is_morning_window and not morning_check_done:
+                # 1. Initial State Check
                 if not morning_initial_door_checked and not door_transition_pending:
                     morning_initial_door_checked = True
                     if is_door_open:
-                        persons_auth_status = False  # door already open = no proper 2-person auth
+                        persons_auth_status = False
                         _capture("DOOR_OPENED_EARLIER_THIS_SESSION", {
                             "authorized": False,
                             "door_state": "OPEN",
@@ -737,20 +787,42 @@ def main(
                         state_machine.session["door_open_captured"] = True
                         morning_check_done = True
                         print(f"[MORNING] Door already open at {curr_hour_min} IST. Flagging false authentication.")
-                    else:
-                        visualizer.draw_status_text(frame, "MORNING CHECK: IDENTIFYING 2 UNLOCKERS",
-                                                    (10, 130), color=(0, 165, 255))
-                elif door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
+                        return # Skip further logic for this frame
+
+                # 2. Transition Detection (Checked every frame)
+                if door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
                     morning_post_open_started = True
                     morning_post_open_start_frame = frame_idx
                     print(f"[MORNING] CLOSED->OPEN detected at {curr_hour_min} IST. "
                           f"Starting {config.MORNING_POST_OPEN_AUTH_SECONDS:.0f}s post-open auth window.")
-                    visualizer.draw_status_text(frame, "MORNING CHECK: DOOR OPENED - CONFIRMING UNLOCKERS",
-                                                (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20))
-                elif morning_post_open_started:
+                    
+                    # Strict physical presence check: both verified unlockers MUST be in the interaction zone.
+                    # prior_auth bypass removed to ensure they are physically confirmed after door opens.
+                    is_auth = auth_result["authorized"]
+                    both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
+
+                    if is_auth and both_in_interaction:
+                        persons_auth_status = True
+                        _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
+                            "authorized": True,
+                            "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"),
+                            "transition": "CLOSED_TO_OPEN",
+                            "both_in_interaction_zone": True,
+                            "timing": "immediate",
+                        }, "Morning")
+                        print(f"[MORNING] Authorized CLOSED->OPEN confirmed immediately at {curr_hour_min} IST.")
+                        state_machine.session["door_open_captured"] = True
+                        morning_post_open_started = False
+                        morning_check_done = True
+                        return
+
+                # 3. Ongoing Grace Window Logic
+                if morning_post_open_started:
                     elapsed = (frame_idx - morning_post_open_start_frame) / fps
                     is_auth = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
+
                     if is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
@@ -782,12 +854,15 @@ def main(
                         rem = config.MORNING_POST_OPEN_AUTH_SECONDS - elapsed
                         visualizer.draw_status_text(frame, f"MORNING CHECK: CONFIRMING UNLOCKERS ({rem:.1f}s)",
                                                     (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20))
-                elif auth_result["authorized"]:
-                    visualizer.draw_status_text(frame, "MORNING CHECK: 2 UNLOCKERS READY - WAITING FOR CLOSED->OPEN",
-                                                (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
-                else:
-                    visualizer.draw_status_text(frame, "MORNING CHECK: IDENTIFYING 2 UNLOCKERS",
-                                                (10, 130), color=(0, 165, 255))
+                
+                # 4. Idle/Waiting Display (if not in grace window and not done)
+                elif not morning_check_done:
+                    if auth_result["authorized"]:
+                        visualizer.draw_status_text(frame, "MORNING CHECK: 2 UNLOCKERS READY - WAITING FOR CLOSED->OPEN",
+                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                    else:
+                        visualizer.draw_status_text(frame, "MORNING CHECK: IDENTIFYING 2 UNLOCKERS",
+                                                    (10, 130), color=(0, 165, 255))
             # ===== EVENING CHECK (OPEN -> CLOSED) =====
             elif is_evening_window and not evening_check_done:
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:

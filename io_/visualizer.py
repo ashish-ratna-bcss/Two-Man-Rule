@@ -224,3 +224,31 @@ class Visualizer:
             cv2.LINE_AA
         )
         return frame
+
+    def draw_ghost_anchor(
+        self,
+        frame: np.ndarray,
+        anchor: Tuple[float, float],
+        label: str,
+        color: Tuple[int, int, int] = (150, 150, 150)
+    ) -> np.ndarray:
+        """Draw a 'ghost' crosshair for a lost person at their last known anchor position."""
+        ax, ay = map(int, anchor)
+        size = 15
+        # Draw crosshair
+        cv2.line(frame, (ax - size, ay), (ax + size, ay), color, 1)
+        cv2.line(frame, (ax, ay - size), (ax, ay + size), color, 1)
+        # Draw small circle
+        cv2.circle(frame, (ax, ay), 5, color, 1)
+        # Draw label
+        cv2.putText(
+            frame,
+            label,
+            (ax + 10, ay - 10),
+            self.font,
+            0.4,
+            color,
+            1,
+            cv2.LINE_AA
+        )
+        return frame
