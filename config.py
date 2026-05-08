@@ -24,6 +24,7 @@ DOOR_FACING_ARM_RAISE_PIXELS = 30
 LEFT_RIGHT_ORDER_MIN_PIXELS = 25
 UNLOCKER_ANCHOR_MATCH_PIXELS = 95
 MAX_SYNTHETIC_HOLD_FRAMES = 60  # ~2.0s at 30 FPS. Dropped after this if not re-detected.
+DEPARTURE_FRAMES_THRESHOLD = 15  # ~0.5s at 30 FPS. Frames absent from tracker before verified unlocker marked departed.
 
 # ============ POSE KEYPOINT INDICES (YOLOv11) ============
 # Standard COCO format: 0=Nose, 1=L_Eye, 2=R_Eye, ..., 9=L_Wrist, 10=R_Wrist, 15=L_Ankle, 16=R_Ankle
@@ -93,7 +94,7 @@ STREAMS_CONFIG = [
         "max_unlock_seconds": 10.0,
         "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
-            "LOCKS_ROI": np.array([(627, 252), (905, 129), (996, 469), (750, 588)], np.int32),
+                "LOCKS_ROI": np.array([(584, 272), (888, 117), (1002, 525), (673, 690)], np.int32),
             "DOOR_ROI": np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32),
             "DOOR_CORNER_ROI": np.array([[640.30, 13.22], [659.51, 73.73], [845.86, 9.38]], np.int32),
             "STANDING_ZONE": np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32),

@@ -77,6 +77,12 @@ class DualAuthStateMachine:
         # Frames since each verified slot was last directly seen — drives dynamic remap radius
         self.slot_lost_frames = {"a": 0, "b": 0}
 
+        # Departure tracking: frames since verified unlocker last found in tracked_persons (any pose).
+        # Once slot_departed[slot] = True it is irreversible for this session — a different physical
+        # person inheriting the same tracker ID cannot satisfy the zone presence check.
+        self.slot_departed = {"a": False, "b": False}
+        self.slot_zone_absent_frames = {"a": 0, "b": 0}
+
         # Per-person sequential lock interaction progress.
         # A tracker ID is only promoted to candidate AFTER
         # all 4 arm keypoints (LW, LE, RW, RL) are inside LOCKS_ROI simultaneously.
@@ -251,6 +257,44 @@ class DualAuthStateMachine:
                     print(f"[CANDI] P{1 if slot == 'a' else 2} candidate ID {candidate_id} (timer={timer}f)")
 
         self._refresh_verified_slots(pose_results)
+
+        # ── Departure detection ───────────────────────────────────────────────
+        # Track whether each verified unlocker is STILL the same physical person.
+        # slot_departed is set irreversibly when:
+        #   (a) The assigned ID disappears from tracked_persons for >= DEPARTURE_FRAMES_THRESHOLD, OR
+        #   (b) The bbox height of whoever now holds that ID mismatches the reference by >40%
+        #       (indicates a different person inherited the tracker ID via ReID alias).
+        for slot in ("a", "b"):
+            if self.slot_departed[slot]:
+                continue
+            assigned_id = self.session.get(f"id_{slot}")
+            if assigned_id is None or self.verified_anchors[slot] is None:
+                continue
+
+            if assigned_id in tracked_persons:
+                # Check height continuity — catch ByteTrack ReID alias to a different person
+                height_ref_bbox = self.slot_height_ref.get(slot) or self.last_seen_bbox.get(slot)
+                if height_ref_bbox is not None:
+                    ref_h = float(height_ref_bbox[3] - height_ref_bbox[1])
+                    cand_bbox = tracked_persons[assigned_id].get("bbox")
+                    if cand_bbox is not None and ref_h > 0:
+                        cand_h = float(cand_bbox[3] - cand_bbox[1])
+                        if abs(cand_h - ref_h) / ref_h > 0.4:
+                            print(f"[DEPART] P{1 if slot == 'a' else 2} ID {assigned_id} "
+                                  f"height mismatch ref={ref_h:.0f}px cand={cand_h:.0f}px → "
+                                  f"different person inherited ID → departed")
+                            self.slot_departed[slot] = True
+                            continue
+                self.slot_zone_absent_frames[slot] = 0
+            else:
+                self.slot_zone_absent_frames[slot] += frame_step
+                if self.slot_zone_absent_frames[slot] >= config.DEPARTURE_FRAMES_THRESHOLD:
+                    print(f"[DEPART] P{1 if slot == 'a' else 2} ID {assigned_id} absent from "
+                          f"tracker {self.slot_zone_absent_frames[slot]}f >= "
+                          f"{config.DEPARTURE_FRAMES_THRESHOLD}f → departed")
+                    self.slot_departed[slot] = True
+        # ─────────────────────────────────────────────────────────────────────
+
         self.active_ids_in_zone = interacting_ids
         self._update_improper_positioning(pose_results)
 
@@ -432,6 +476,8 @@ class DualAuthStateMachine:
         self.last_seen_bbox = {"a": None, "b": None}
         self.slot_height_ref = {"a": None, "b": None}
         self.candidate_bbox = {"a": None, "b": None}
+        self.slot_departed = {"a": False, "b": False}
+        self.slot_zone_absent_frames = {"a": 0, "b": 0}
 
 
     def _refresh_verified_slots(self, pose_results: Dict[int, Dict]):
@@ -986,6 +1032,9 @@ class DualAuthStateMachine:
 
         Returns True if re-assignment was made.
         """
+        if self.slot_departed[slot]:
+            return False  # departed unlocker must not be silently remapped to a stranger
+
         id_key = f"id_{slot}"
         current_id = self.session.get(id_key)
         anchor = self.verified_anchors[slot]
@@ -1114,10 +1163,16 @@ class DualAuthStateMachine:
 
     def verified_unlockers_in_interaction_zone(self, tracked_persons: Dict[int, Dict]) -> bool:
         """Return True when verified P1 and P2 are both in INTERACTION_ZONE.
-        Falls back to last_seen_head_pos when tracker drops an ID (e.g. occlusion at doorway)."""
+        Falls back to last_seen_head_pos when tracker drops an ID (e.g. occlusion at doorway).
+        Returns False immediately if either unlocker has been marked departed — a different
+        physical person inheriting the same tracker ID does not satisfy this check."""
         for slot in ("a", "b"):
             track_id = self.session.get(f"id_{slot}")
             if track_id is None:
+                return False
+
+            if self.slot_departed[slot]:
+                print(f"[ZONE] P{1 if slot == 'a' else 2} marked departed → both_in_interaction_zone=False")
                 return False
 
             head_pos = None
