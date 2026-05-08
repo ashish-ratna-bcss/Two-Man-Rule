@@ -414,6 +414,8 @@ def main(
         _has_max = "max_unlock_seconds" in stream_config
         stream_min_unlock = float(stream_config["min_unlock_seconds"]) if _has_min else float(config.MIN_UNLOCK_SECONDS)
         stream_max_unlock = float(stream_config["max_unlock_seconds"]) if _has_max else float(config.MAX_UNLOCK_SECONDS)
+        stream_morning_post_open_auth = float(stream_config.get("morning_post_open_auth_seconds", config.MORNING_POST_OPEN_AUTH_SECONDS))
+        stream_evening_second_unlocker_timeout = float(stream_config.get("evening_second_unlocker_timeout_seconds", config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS))
         print(f"[SYSTEM] Lock interaction window: "
               f"min={stream_min_unlock}s ({'stream' if _has_min else 'global default'}), "
               f"max={stream_max_unlock}s ({'stream' if _has_max else 'global default'})")
@@ -735,10 +737,10 @@ def main(
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
+                persons_auth_status = False  # Set before capture so screenshot shows UNAVAILABLE
                 _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
-                
+
                 if current_auth_window == "evening":
-                    persons_auth_status = False
                     evening_check_done = True
                     evening_auth_started = False
                     print(f"[EVENING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
@@ -748,7 +750,6 @@ def main(
                     print(f"[MORNING] Potential SAME_ID violation detected (ID {state_machine.session.get('id_a')}). Waiting for door transition.")
                     # Only mark as FAILED if the door is already OPEN and we are not in grace period
                     if is_door_open and not morning_post_open_started:
-                        persons_auth_status = False
                         morning_check_done = True
                         print(f"[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
                 
@@ -794,7 +795,7 @@ def main(
                     morning_post_open_started = True
                     morning_post_open_start_frame = frame_idx
                     print(f"[MORNING] CLOSED->OPEN detected at {curr_hour_min} IST. "
-                          f"Starting {config.MORNING_POST_OPEN_AUTH_SECONDS:.0f}s post-open auth window.")
+                          f"Starting {stream_morning_post_open_auth:.0f}s post-open auth window.")
                     
                     # Strict physical presence check: both verified unlockers MUST be in the interaction zone.
                     # prior_auth bypass removed to ensure they are physically confirmed after door opens.
@@ -836,7 +837,7 @@ def main(
                         state_machine.session["door_open_captured"] = True
                         morning_post_open_started = False
                         morning_check_done = True
-                    elif elapsed >= config.MORNING_POST_OPEN_AUTH_SECONDS:
+                    elif elapsed >= stream_morning_post_open_auth:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
@@ -851,7 +852,7 @@ def main(
                         morning_post_open_started = False
                         morning_check_done = True
                     else:
-                        rem = config.MORNING_POST_OPEN_AUTH_SECONDS - elapsed
+                        rem = stream_morning_post_open_auth - elapsed
                         visualizer.draw_status_text(frame, f"MORNING CHECK: CONFIRMING UNLOCKERS ({rem:.1f}s)",
                                                     (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20))
                 
@@ -891,7 +892,7 @@ def main(
                         print(f"[EVENING] Authorized closure confirmed at {curr_hour_min} IST.")
                         evening_check_done = True
                         evening_auth_started = False
-                    elif elapsed_seconds >= config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS:
+                    elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
@@ -904,7 +905,7 @@ def main(
                         evening_check_done = True
                         evening_auth_started = False
                     else:
-                        wait_time_rem = config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS - elapsed_seconds
+                        wait_time_rem = stream_evening_second_unlocker_timeout - elapsed_seconds
                         visualizer.draw_status_text(frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
                                                     (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
                 else:

@@ -4,15 +4,13 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
-MORNING_POST_OPEN_AUTH_SECONDS = 7.0  # After door opens, wait up to 30s to confirm 2 authenticated persons.
-                                        # Increased from 5s to allow the A→B sequential gate to complete
-                                        # (both wrists on LOCK_A, then both wrists on LOCK_B) before timeout.
+MORNING_POST_OPEN_AUTH_SECONDS = 7.0   # fallback default; prefer per-stream "morning_post_open_auth_seconds"
+EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS = 300.0  # fallback default; prefer per-stream "evening_second_unlocker_timeout_seconds"
 
 # ============ TIMERS (in seconds) ============
 # One valid key-turn/unlock interaction must last at least 5s and no more than 10s.
 MIN_UNLOCK_SECONDS = 5.0
 MAX_UNLOCK_SECONDS = 10.0
-EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS = 300.0
 
 # ============ GEOMETRIC CONSTRAINTS ============
 HAND_LOCK_PROXIMITY_PIXELS = 80
@@ -80,6 +78,7 @@ STAGGER_START_DELAY = 2.0  # Seconds between stream launches
 MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 
 STREAMS_CONFIG = [
+    # Stream 0
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8001/Streaming/Channels/4001",
         "camera_id": "GF-1-CAM-40",
@@ -92,6 +91,8 @@ STREAMS_CONFIG = [
         "motion_threshold": 6.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 7.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
         "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
                 "LOCKS_ROI": np.array([(584, 272), (888, 117), (1002, 525), (673, 690)], np.int32),
@@ -101,6 +102,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(272, 160), (1857, 2), (1750, 714), (275, 1392)], np.int32)
         }
     },
+    # Stream 1
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
         "camera_id": "FF-1-CAM-42",
@@ -114,6 +116,8 @@ STREAMS_CONFIG = [
         "motion_threshold": 6.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 7.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
             "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
@@ -122,6 +126,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
         }
     },
+    # Stream 2
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
         "camera_id": "GF-2-CAM-21",
@@ -136,12 +141,60 @@ STREAMS_CONFIG = [
         "motion_threshold": 6.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 7.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
             "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
             "DOOR_CORNER_ROI": np.array([[488, 113], [493, 172], [609, 72]], np.int32),
             "STANDING_ZONE": np.array([[688, 1178], [1227, 918], [1420, 1118], [929, 1416]], np.int32),
             "INTERACTION_ZONE": np.array([[6, 11], [2615, 0], [1927, 1511], [25, 1508]], np.int32)
+        }
+    },
+    # Stream 3
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.76.17:8001/Streaming/Channels/2001",
+        "camera_id": "GF-4-CAM-20",
+        "site_id": "4",
+        "site_name": "Vijayawada",
+        "closed_door_reference": "closed_GF-4-CAM-20.jpg",
+        "ssim_threshold": 0.92,
+        "debounce_threshold": 20,
+        "intensity_threshold": 35,
+        "motion_threshold": 6.0,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 7.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
+            "DOOR_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
+            "LOCKS_ROI": np.array([(708, 31), (1217, 31), (1224, 425), (507, 478)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(1238, 2), (1218, 1), (1239, 43)], np.int32),
+            "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
+        }
+    },
+    # Stream 4
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.37.109:8001/Streaming/Channels/2501",
+        "camera_id": "GF-5-CAM-25",
+        "site_id": "5",
+        "site_name": "Jayanagar",
+        "closed_door_reference": "closed_GF-5-CAM-25.jpg",
+        "ssim_threshold": 0.65,
+        "debounce_threshold": 20,
+        "intensity_threshold": 35,
+        "motion_threshold": 6.0,
+        "min_unlock_seconds": 4.0,
+        "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 4.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([(803, 2), (908, 1), (798, 37)], np.int32),
+            "LOCKS_ROI": np.array([(597, 86), (1092, 80), (994, 545), (526, 574)], np.int32),
+            "DOOR_ROI": np.array([(581, 3), (1187, 0), (1034, 742), (471, 797)], np.int32),
+            "STANDING_ZONE": np.array([(545, 897), (544, 1103), (1165, 1050), (1154, 853)], np.int32),
+            "INTERACTION_ZONE": np.array([(0, 8), (0, 1340), (1902, 1416), (2076, 11)], np.int32)
         }
     }
 ]

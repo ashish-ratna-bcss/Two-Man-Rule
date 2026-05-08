@@ -97,12 +97,11 @@ class DoorVerifier:
                     # drop before treating it as an OPEN event. This behavior
                     # can be disabled via the `darkening_protection` flag.
                     if self.darkening_protection and curr_mean < (self.reference_mean - self.intensity_threshold):
-                        # If SSIM hasn't fallen well below the similarity
-                        # threshold, treat this as a lighting change and ignore.
-                        if self.last_ssim >= (self.similarity_threshold - 0.08):
-                            raw_is_open = False
-                        else:
-                            raw_is_open = texture_open or intensity_open
+                        # Scene is significantly darker than reference = lights turned off.
+                        # SSIM naturally drops against a bright reference regardless of door
+                        # state, so it cannot be trusted here. Hold the last stable state so
+                        # a lights-off → lights-on cycle never produces a spurious transition.
+                        raw_is_open = self.stable_is_open
                     else:
                         raw_is_open = texture_open or intensity_open
 
