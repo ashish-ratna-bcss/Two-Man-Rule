@@ -85,10 +85,13 @@ STREAMS_CONFIG = [
         "site_id": "1",
         "site_name": "somajiguda",
         "closed_door_reference": "closed_GF-1-CAM-40.jpg",
-        "ssim_threshold": 0.92,
+        # Lowered from 0.92: DOOR_CORNER patch is flat dark door surface (std≈2.4).
+        # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
+        # shift, so 0.92 never fires.  0.80 gives reliable open detection.
+        "ssim_threshold": 0.80,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
-        "motion_threshold": 6.0,
+        "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -111,9 +114,8 @@ STREAMS_CONFIG = [
         "closed_door_reference": "closed_FF-1-CAM-42.jpg",
         "ssim_threshold": 0.75,
         "debounce_threshold": 20,
-        # Per-stream light/SSIM tuning (tuned to avoid false OPEN on reflections)
-        "intensity_threshold": 35,  # mean intensity difference to consider lighting change
-        "motion_threshold": 6.0,
+        "intensity_threshold": 35,
+        "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -133,12 +135,10 @@ STREAMS_CONFIG = [
         "site_id": "2",
         "site_name": "Jubliee Hills",
         "closed_door_reference": "closed_GF-2-CAM-21.jpg",
-        # Lowered after reviewing live SSIM logs (closed views were ~0.55-0.62)
         "ssim_threshold": 0.50,
         "debounce_threshold": 20,
-        # Per-stream light/SSIM tuning (tuned to avoid false OPEN on reflections)
         "intensity_threshold": 35,
-        "motion_threshold": 6.0,
+        "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -158,10 +158,13 @@ STREAMS_CONFIG = [
         "site_id": "4",
         "site_name": "Vijayawada",
         "closed_door_reference": "closed_GF-4-CAM-20.jpg",
-        "ssim_threshold": 0.92,
+        # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
+        # High SSIM threshold never fires on low-texture patches.
+        # TODO: recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
+        "ssim_threshold": 0.75,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
-        "motion_threshold": 6.0,
+        "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -170,7 +173,10 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
             "DOOR_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
             "LOCKS_ROI": np.array([(708, 31), (1217, 31), (1224, 425), (507, 478)], np.int32),
-            "DOOR_CORNER_ROI": np.array([(1238, 2), (1218, 1), (1239, 43)], np.int32),
+            # Recalibrated: old 22x43px crop at (1218,1) was on flat dark door surface (std=3.2).
+            # New 150x80px crop captures door-frame-to-wall transition (ref_std=84.2).
+            # SSIM closed=0.82-0.85, open≈0.60 → threshold 0.75 gives reliable detection.
+            "DOOR_CORNER_ROI": np.array([(620, 0), (770, 0), (770, 80), (620, 80)], np.int32),
             "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
         }
     },
@@ -184,7 +190,7 @@ STREAMS_CONFIG = [
         "ssim_threshold": 0.65,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
-        "motion_threshold": 6.0,
+        "motion_threshold": 3.0,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,

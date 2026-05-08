@@ -27,19 +27,36 @@ class DoorVerifier:
         self.rx, self.ry, self.rw, self.rh = cv2.boundingRect(door_corner_roi)
         ref_crop = reference[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
         raw_patch = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
-        
-        # Pre-scale reference patch for SSIM efficiency (Production Optimization)
-        # 100px width provides enough texture for door state without CPU bloat
-        self.ssim_size = (100, int(100 * self.rh / self.rw))
+
+        # Scale to fixed 100px on the LONGER dimension to preserve aspect ratio.
+        # Avoids extreme squishing (e.g. 206x65 → 100x31) and extreme upscaling
+        # (e.g. 22x43 → 100x195) that both degrade SSIM reliability.
+        if self.rw >= self.rh:
+            new_w = 100
+            new_h = max(16, int(100 * self.rh / max(self.rw, 1)))
+        else:
+            new_h = 100
+            new_w = max(16, int(100 * self.rw / max(self.rh, 1)))
+        self.ssim_size = (new_w, new_h)
         self.reference_patch = cv2.resize(raw_patch, self.ssim_size)
         self.reference_mean = np.mean(self.reference_patch)
+        ref_std = float(np.std(self.reference_patch))
 
         self.similarity_threshold = similarity_threshold
-        # Allow per-stream tuning (fall back to sensible defaults)
         self.intensity_threshold = intensity_threshold if intensity_threshold is not None else 25
         self.debounce_threshold = debounce_threshold
-        self.motion_threshold = motion_threshold if motion_threshold is not None else 3.0  # Mean pixel diff below which we skip SSIM
         self.darkening_protection = bool(darkening_protection)
+
+        # Motion gate: for very low-texture patches (flat door surface) the
+        # configured threshold can be higher than the actual per-pixel change a
+        # real door opening produces.  Cap it at 60 % of the patch's own std so
+        # the gate is always proportional to the patch's inherent variation.
+        raw_motion_thresh = motion_threshold if motion_threshold is not None else 3.0
+        if ref_std < 10.0:
+            adaptive_cap = max(1.5, ref_std * 0.6)
+            self.motion_threshold = min(raw_motion_thresh, adaptive_cap)
+        else:
+            self.motion_threshold = raw_motion_thresh
 
         self.candidate_state = False      # False = CLOSED
         self.consecutive_frames_agreed = 0
@@ -47,10 +64,11 @@ class DoorVerifier:
         self.last_ssim = 1.0
         self._frame_tick = 0
 
-        print(f"[DOOR] Initialized | SSIM Target Size: {self.ssim_size}")
+        print(f"[DOOR] Initialized | patch={self.rw}x{self.rh}px | SSIM size: {self.ssim_size} | ref_std={ref_std:.1f}")
         print(
             f"[DOOR] thresholds: similarity={self.similarity_threshold} "
-            f"intensity={self.intensity_threshold} motion={self.motion_threshold} debounce_frames={self.debounce_threshold}"
+            f"intensity={self.intensity_threshold} motion={self.motion_threshold:.2f}"
+            f"{'(adaptive)' if ref_std < 10.0 else ''} debounce_frames={self.debounce_threshold}"
         )
 
     def verify(self, frame: np.ndarray) -> bool:

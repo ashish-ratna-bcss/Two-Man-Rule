@@ -909,7 +909,7 @@ def main(
                         visualizer.draw_status_text(frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
                                                     (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
                 else:
-                    if not is_door_open and not door_transition_pending:
+                    if not is_door_open and not door_transition_pending and last_door_state is not None:
                         evening_check_done = True
                         print(f"[EVENING] Door already closed at {curr_hour_min} IST. Skipping evening check for today.")
                     else:
