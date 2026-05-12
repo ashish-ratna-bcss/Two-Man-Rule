@@ -84,7 +84,7 @@ STREAMS_CONFIG = [
         "camera_id": "GF-1-CAM-40",
         "site_id": "1",
         "site_name": "somajiguda",
-        "closed_door_reference": "closed_GF-1-CAM-40.jpg",
+        "closed_door_reference": "close_doors/closed_GF-1-CAM-40.jpg",
         # Lowered from 0.92: DOOR_CORNER patch is flat dark door surface (std≈2.4).
         # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
         # shift, so 0.92 never fires.  0.80 gives reliable open detection.
@@ -111,7 +111,7 @@ STREAMS_CONFIG = [
         "camera_id": "FF-1-CAM-42",
         "site_id": "1",
         "site_name": "somajiguda",
-        "closed_door_reference": "closed_FF-1-CAM-42.jpg",
+        "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
         "ssim_threshold": 0.75,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
@@ -133,8 +133,8 @@ STREAMS_CONFIG = [
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
         "camera_id": "GF-2-CAM-21",
         "site_id": "2",
-        "site_name": "Jubliee Hills",
-        "closed_door_reference": "closed_GF-2-CAM-21.jpg",
+        "site_name": "jubliee_hills",
+        "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
         "ssim_threshold": 0.50,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
@@ -156,8 +156,8 @@ STREAMS_CONFIG = [
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.76.17:8001/Streaming/Channels/2001",
         "camera_id": "GF-4-CAM-20",
         "site_id": "4",
-        "site_name": "Vijayawada",
-        "closed_door_reference": "closed_GF-4-CAM-20.jpg",
+        "site_name": "vijayawada",
+        "closed_door_reference": "close_doors/closed_GF-4-CAM-20.jpg",
         # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
         # High SSIM threshold never fires on low-texture patches.
         # TODO: recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
@@ -185,8 +185,8 @@ STREAMS_CONFIG = [
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.37.109:8001/Streaming/Channels/2501",
         "camera_id": "GF-5-CAM-25",
         "site_id": "5",
-        "site_name": "Jayanagar",
-        "closed_door_reference": "closed_GF-5-CAM-25.jpg",
+        "site_name": "jayanagar",
+        "closed_door_reference": "close_doors/closed_GF-5-CAM-25.jpg",
         "ssim_threshold": 0.65,
         "debounce_threshold": 20,
         "intensity_threshold": 35,
