@@ -25,6 +25,9 @@ cactches/
 *.jpeg
 *.mp4
 
+# Allow jpg files in close_doors folder
+!close_doors/*.jpg
+
 # Environment and IDE
 .venv/
 venv/
