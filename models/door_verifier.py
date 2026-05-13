@@ -62,6 +62,9 @@ class DoorVerifier:
         self.consecutive_frames_agreed = 0
         self.stable_is_open = False
         self.last_ssim = 1.0
+        self.last_curr_mean = None
+        self.last_intensity_diff = None
+        self.last_mean_diff = None
         self._frame_tick = 0
 
         print(f"[DOOR] Initialized | patch={self.rw}x{self.rh}px | SSIM size: {self.ssim_size} | ref_std={ref_std:.1f}")
@@ -78,19 +81,24 @@ class DoorVerifier:
             curr_patch_raw = cv2.cvtColor(curr_crop, cv2.COLOR_BGR2GRAY)
             curr_patch = cv2.resize(curr_patch_raw, self.ssim_size)
 
+            # Precompute current mean for intensity/logging
+            curr_mean = float(np.mean(curr_patch))
+
             # 1. Motion Gate (Cheap Pixel-Diff) - Highest Efficiency Gain
             # If the patch hasn't changed at all, skip SSIM entirely
             pixel_diff = cv2.absdiff(curr_patch, self.reference_patch)
-            mean_diff = np.mean(pixel_diff)
-            
+            mean_diff = float(np.mean(pixel_diff))
+            self.last_mean_diff = mean_diff
+            self.last_curr_mean = curr_mean
+            self.last_intensity_diff = abs(curr_mean - self.reference_mean)
+
             if mean_diff < self.motion_threshold:
                 # No significant motion/lighting change - keep current raw state
                 raw_is_open = False # Matches reference (CLOSED)
                 self.last_ssim = 1.0
             else:
                 # 2. Mean Intensity Check
-                curr_mean = np.mean(curr_patch)
-                intensity_diff = abs(curr_mean - self.reference_mean)
+                intensity_diff = self.last_intensity_diff
 
                 # 3. Optimized SSIM (on downscaled patch)
                 self.last_ssim = float(ssim(self.reference_patch, curr_patch, full=False))
@@ -132,8 +140,9 @@ class DoorVerifier:
 
             self._frame_tick += 1
             if self._frame_tick % 30 == 0:
-                print(f"[DOOR] SSIM: {self.last_ssim:.3f} | Diff: {mean_diff:.1f} | "
-                      f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'}")
+                print(f"[DOOR] SSIM: {self.last_ssim:.3f} | Diff: {self.last_mean_diff:.1f} | "
+                    f"Intensity: {self.last_curr_mean:.1f} (Δ{self.last_intensity_diff:.1f}) | "
+                    f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'}")
 
             if self.consecutive_frames_agreed >= self.debounce_threshold:
                 if self.stable_is_open != self.candidate_state:
@@ -149,6 +158,15 @@ class DoorVerifier:
 
     def get_last_ssim(self) -> Optional[float]:
         return self.last_ssim
+
+    def get_last_intensity(self) -> Optional[float]:
+        return self.last_curr_mean
+
+    def get_last_intensity_diff(self) -> Optional[float]:
+        return self.last_intensity_diff
+
+    def get_last_mean_diff(self) -> Optional[float]:
+        return self.last_mean_diff
 
     def is_transition_pending(self) -> bool:
         return self.candidate_state != self.stable_is_open

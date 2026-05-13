@@ -37,11 +37,14 @@ pip install -r requirements.txt
 ### 1. Production Run (Headless, Daemon)
 Reads live RTSP stream for a specific configuration, runs forever, resets daily at midnight IST:
 ```bash
-# Run the first stream (default)
+# Run all configured streams in parallel (default)
 python3 main.py
 
-# Run the second stream defined in config.py
+# Run one stream by index
 python3 main.py --stream-index 1
+
+# Run selected streams only
+python3 main.py --stream-indices 0,3,4
 ```
 **Behaviour:**
 - **Morning window 09:30–10:30 IST**: Tracks 2 unlockers, waits for door CLOSED→OPEN transition
@@ -107,7 +110,8 @@ Every captured screenshot contains only:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `video_source` | config | (Positional) Override video path/URL for the stream. |
-| `--stream-index N` | 0 | Index of the stream configuration to use from `config.STREAMS_CONFIG`. |
+| `--stream-index N` | none | Single stream index from `config.STREAMS_CONFIG`. |
+| `--stream-indices a,b,c` | none | Run only selected stream indexes in parallel (example: `0,2,4`). |
 | `--show` | off | Enable live OpenCV preview window |
 | `--debug` | off | Show all debug overlays on live window. Screenshots always clean |
 | `--test-window morning\|evening` | off | Force auth window regardless of IST time. Exits after check complete |
@@ -138,4 +142,117 @@ Update `config.py` to adjust:
 - **SSIM_THRESHOLD**: Fine-tune door state sensitivity (default is 0.92).
 
 ---
+
+## Parameter Tuning Guide
+
+Here's a practical decision tree for adjusting each parameter based on real-world conditions you'll observe:
+
+### **1. SSIM Threshold** – Door Open/Close Detection
+
+#### **Problem: Door opens but NOT detected (False Negative)**
+**Increase the threshold slightly** (e.g., 0.65 → 0.70)
+- **Conditions:** Door physically opens but SSIM stays high (>0.75)
+- **Why:** Low-texture door surface, consistent lighting, minimal visual change
+- **Example:** Dark flat door, camera angle shows little edge detail when opening
+- **Check:** Run debug mode, log SSIM values when door actually opens
+
+#### **Problem: Door appears to open when it's really closed (False Positive)**
+**Decrease the threshold slightly** (e.g., 0.65 → 0.60)
+- **Conditions:** Shadows, reflections, or lighting artifacts cause SSIM to dip below threshold
+- **Why:** Temporary shadow/glare makes patch look different without actual door movement
+- **Example:** Sun reflection on door, overhead light flickers, Person's shadow crosses DOOR_CORNER_ROI
+- **Check:** Look for brief SSIM dips during non-opening events
+
+#### **Problem: Oscillating door state (flickering between open/closed)**
+**Increase threshold + increase debounce** (see below)
+- **Conditions:** SSIM hovers right around your threshold (e.g., 0.64-0.66)
+- **Why:** Micro-variations in lighting cause SSIM to cross threshold repeatedly
+- **Solution:** Move threshold further from natural variation range
+
+### **2. Debounce Threshold** – State Change Confirmation
+
+#### **Problem: Door opens but detection is delayed/slow**
+**Decrease debounce frames** (e.g., 20 → 10–15)
+- **Conditions:** Real door opens but system takes 0.67s to confirm
+- **Why:** 20 frames at 30 FPS = 0.67s lag; if your operations are faster, it's too slow
+- **Example:** Security team needs instant alerts; 0.67s feels sluggish
+- **Risk:** More false positives from noise
+
+#### **Problem: False door-open alerts from shadows/flickers**
+**Increase debounce frames** (e.g., 20 → 25–30)
+- **Conditions:** Doorway has lots of transient shadows, reflections, or light changes
+- **Why:** Requires 20+ consecutive SSIM dips to confirm; brief artifacts don't count
+- **Example:** Windows near door, passing traffic causing shadows, flickering fluorescent lights
+- **Trade-off:** Real door openings take 0.83–1.0s to confirm
+
+#### **Problem: Door closes but system still thinks it's open**
+**Decrease debounce slightly** (e.g., 20 → 15)
+- **Conditions:** When door reaches "closed" SSIM level, it takes too long to register
+- **Why:** 20 frames required SSIM to stay high again
+- **Check:** Log state transitions; if close detection lags, debounce is too high
+
+### **3. Intensity Threshold** – Brightness Change Detection
+
+#### **Problem: System triggers "door open" when lights just turn on/off**
+**Increase intensity threshold** (e.g., 35 → 45–50)
+- **Conditions:** Overhead lights or sudden illumination in room
+- **Why:** Lights on/off causes +40 brightness units in DOOR_CORNER_ROI, confuses door detector
+- **Example:** Night shift → morning shift, lights flip on; system falsely detects door movement
+- **Mitigation:** `DOOR_DARKENING_PROTECTION = True` should help, but increase threshold as backup
+
+#### **Problem: Genuine door movement not detected (especially subtle openings)**
+**Decrease intensity threshold** (e.g., 35 → 25–30)
+- **Conditions:** Door opening is slow/partial, causes only ±15–20 brightness units change
+- **Why:** Threshold too high; real motion is ignored
+- **Example:** Door slightly ajar opening slower; barely triggers motion detector
+
+#### **Problem: Lighting changes mid-motion confuse the system**
+**Use in combination with SSIM**
+- **Increased intensity_threshold** + **Increased SSIM_threshold tolerance**
+- **Why:** If lights change AND door opens, SSIM alone may not capture it; need intensity backup
+
+### **4. Motion Threshold** – Optical Flow/Frame Difference
+
+#### **Problem: Camera vibration/wind causes false motion detection**
+**Increase motion threshold** (e.g., 3.0 → 4.0–5.0)
+- **Conditions:** Outdoor camera, structural movement, camera shake
+- **Why:** Reduces noise sensitivity; ignores small jitter
+- **Example:** Tree branches moving, vibration from nearby traffic
+- **Trade-off:** May miss very subtle door movement
+
+#### **Problem: Door opens silently/slowly but motion is not detected**
+**Decrease motion threshold** (e.g., 3.0 → 2.0–2.5)
+- **Conditions:** Smooth slow door opening, hydraulic/silent closer
+- **Why:** Threshold too high; gradual optical flow below it
+- **Example:** Automatic door opener, soft-close mechanism
+- **Risk:** Increased sensitivity to non-door motion
+
+#### **Problem: People walking near door triggers false motion**
+**Increase motion threshold** (e.g., 3.0 → 4.0)
+- **Conditions:** DOOR_CORNER_ROI partially catches human movement
+- **Why:** High threshold filters out fast human movement; only major changes count
+- **Check:** Review ROI definitions; if possible, shrink DOOR_CORNER_ROI instead
+
+### **Decision Matrix**
+
+| **Scenario** | **Parameter** | **Adjust** | **Reason** |
+|--|--|--|--|
+| Door opens but not detected | `ssim_threshold` | ↑ Increase | Low-texture door, minimal visual change |
+| False door-open alerts | `ssim_threshold` / `debounce` | ↓ Decrease / ↑ Increase | Shadows/reflections triggering SSIM dips |
+| Slow/delayed detection | `debounce_threshold` | ↓ Decrease | Confirmation takes too long |
+| Flickering door state | `ssim_threshold` + `debounce` | Widen margin + ↑ Debounce | SSIM hovering at threshold |
+| Lights on/off false triggers | `intensity_threshold` | ↑ Increase | Bright jumps confusing door detector |
+| Missed subtle door motion | `motion_threshold` | ↓ Decrease | Slow/quiet door opening |
+| Camera vibration noise | `motion_threshold` | ↑ Increase | Environmental jitter creating false motion |
+| People/traffic near door | `motion_threshold` | ↑ Increase | Non-door movement triggering detection |
+
+### **Tuning Workflow**
+
+1. **Start with baseline:** Use current config values
+2. **Monitor logs:** Enable debug mode, capture SSIM/motion values during real events
+3. **Identify pattern:** "Is it missing real openings?" vs. "False positives?"
+4. **Adjust one param at a time:** Change only the most relevant parameter
+5. **Test 50+ cycles:** Collect data over hours to filter out random noise
+6. **Commit if stable:** Only lock values after 24+ hours of clean operation
+
 *Developed for PMJ - Two-Man Rule Security Compliance*

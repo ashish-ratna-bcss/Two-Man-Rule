@@ -88,9 +88,9 @@ STREAMS_CONFIG = [
         # Lowered from 0.92: DOOR_CORNER patch is flat dark door surface (std≈2.4).
         # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
         # shift, so 0.92 never fires.  0.80 gives reliable open detection.
-        "ssim_threshold": 0.80,
+        "ssim_threshold": 0.65,
         "debounce_threshold": 20,
-        "intensity_threshold": 35,
+        "intensity_threshold": 40,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
@@ -160,10 +160,10 @@ STREAMS_CONFIG = [
         "closed_door_reference": "close_doors/closed_GF-4-CAM-20.jpg",
         # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
         # High SSIM threshold never fires on low-texture patches.
-        # TODO: recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
-        "ssim_threshold": 0.75,
+        #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
+        "ssim_threshold": 0.60,
         "debounce_threshold": 20,
-        "intensity_threshold": 35,
+        "intensity_threshold": 50,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
@@ -176,7 +176,9 @@ STREAMS_CONFIG = [
             # Recalibrated: old 22x43px crop at (1218,1) was on flat dark door surface (std=3.2).
             # New 150x80px crop captures door-frame-to-wall transition (ref_std=84.2).
             # SSIM closed=0.82-0.85, open≈0.60 → threshold 0.75 gives reliable detection.
-            "DOOR_CORNER_ROI": np.array([(620, 0), (770, 0), (770, 80), (620, 80)], np.int32),
+            # "DOOR_CORNER_ROI": np.array([(1164, 2), (1243, 95), (1243, 4)], np.int32), #right top triagnle 
+            "DOOR_CORNER_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
+ 
             "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
         }
     },
@@ -186,10 +188,10 @@ STREAMS_CONFIG = [
         "camera_id": "GF-5-CAM-25",
         "site_id": "5",
         "site_name": "jayanagar",
-        "closed_door_reference": "close_doors/closed_GF-5-CAM-25.jpg",
+        "closed_door_reference": "close_doors/closed_GF-5-CAM-40.jpg",
         "ssim_threshold": 0.65,
         "debounce_threshold": 20,
-        "intensity_threshold": 35,
+        "intensity_threshold": 40,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,

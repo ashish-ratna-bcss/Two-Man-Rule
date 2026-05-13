@@ -472,6 +472,8 @@ def main(
         last_door_state = None  # To detect transitions
         is_door_open = False
         ssim_val = None
+        intensity_val = None
+        intensity_diff = None
         door_transition_pending = False
         tracking_active = False
         persons_auth_status = None  # None=blank, True=Available, False=Unavailable
@@ -601,6 +603,8 @@ def main(
                         is_door_open = last_door_state if last_door_state is not None else False
                         
                     ssim_val = door_verifier.get_last_ssim()
+                    intensity_val = door_verifier.get_last_intensity()
+                    intensity_diff = door_verifier.get_last_intensity_diff()
                     door_transition_pending = door_verifier.is_transition_pending()
                 else:
                     door_transition_pending = False
@@ -697,7 +701,10 @@ def main(
                 )
             door_status_label = "--" if door_transition_pending else ("OPEN" if is_door_open else "CLOSED")
             if ssim_val is not None:
-                visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {door_status_label}", (10, 80))
+                if debug and intensity_val is not None:
+                    visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Intensity: {intensity_val:.1f} | Door: {door_status_label}", (10, 80))
+                else:
+                    visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {door_status_label}", (10, 80))
 
             # Prominent Top-Right Corner Door Status
             door_status_text = f"DOOR: {door_status_label}"
@@ -968,10 +975,13 @@ def main(
                 id_a = f"ID {state_machine.session['id_a']}" if state_machine.session["id_a"] is not None else "-"
                 id_b = f"ID {state_machine.session['id_b']}" if state_machine.session["id_b"] is not None else "-"
                 ssim_str = f" | Door SSIM: {ssim_val:.3f}" if ssim_val is not None else ""
+                intensity_str = ""
+                if debug and ssim_val is not None and intensity_val is not None:
+                    intensity_str = f" | Intensity: {intensity_val:.1f} (Δ{intensity_diff:.1f})"
                 print(f"[PROGRESS] Frame {frame_idx}/{total_frames} ({video.get_progress():.1f}%) "
                       f"| Unlockers: {n} | State: {state_machine.session['sequence_state']} "
                       f"| Candidates: P1={cand_a} P2={cand_b} "
-                      f"| Verified: P1={id_a} P2={id_b} | {timers}{ssim_str}")
+                      f"| Verified: P1={id_a} P2={id_b} | {timers}{ssim_str}{intensity_str}")
 
             if live_window_available:
                 try:
@@ -1001,6 +1011,12 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Two-Man Rule monitoring with live ROI overlay.")
     parser.add_argument("--stream-index", type=int, default=None, help="Index of the stream config to use from config.STREAMS_CONFIG. If omitted, runs all streams in parallel.")
+    parser.add_argument(
+        "--stream-indices",
+        type=str,
+        default=None,
+        help="Comma-separated stream indexes to run in parallel (example: 0,2,4).",
+    )
     parser.add_argument("video_source", nargs="?", default=None, help="Video file path, RTSP stream, or webcam index (overrides config).")
     parser.add_argument("--show", action="store_true", help="Enable live OpenCV preview window.")
     parser.add_argument(
@@ -1044,61 +1060,107 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.stream_index is None:
-        if args.video_source is not None:
-            # Backwards compatibility: if testing a specific video without stream-index, default to 0
-            args.stream_index = 0
-        else:
-            # No parameters provided -> run all streams in parallel
-            import subprocess
-            print(f"[SYSTEM] No stream parameters provided. Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
-            processes = []
-            
-            base_cmd = [sys.executable, sys.argv[0]]
-            if args.show: 
-                print("[WARNING] --show enabled. OpenCV GUI rendering adds significant CPU/latency overhead and is NOT recommended for production.")
-                base_cmd.append("--show")
-            if args.scale_rois: base_cmd.append("--scale-rois")
-            base_cmd.extend(["--process-every", str(args.process_every)])
-            base_cmd.extend(["--device", args.device])
-            if args.no_half: base_cmd.append("--no-half")
-            if args.show_all_detections: base_cmd.append("--show-all-detections")
-            if args.test_window: base_cmd.extend(["--test-window", args.test_window])
-            if args.debug: base_cmd.append("--debug")
+    if args.stream_indices is not None and args.stream_index is not None:
+        print("[ERROR] Use either --stream-index or --stream-indices, not both.")
+        sys.exit(1)
 
-            for i in range(len(config.STREAMS_CONFIG)):
-                cmd = base_cmd + ["--stream-index", str(i)]
-                p = subprocess.Popen(cmd)
-                processes.append((p, cmd, i))
-                print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
-                
-                # Staggered Startup (Production Safety)
-                if i < len(config.STREAMS_CONFIG) - 1:
-                    delay = getattr(config, "STAGGER_START_DELAY", 2.0)
-                    print(f"[SYSTEM] Waiting {delay}s before next launch...")
-                    time.sleep(delay)
-                
-            print("[SYSTEM] All streams launched. Supervisor active.")
-            try:
-                while True:
-                    time.sleep(5)
-                    # Watchdog / Supervisor logic
-                    for idx, (p, cmd, s_idx) in enumerate(processes):
-                        if p.poll() is not None:
-                            print(f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died with code {p.returncode}. Restarting...")
-                            new_p = subprocess.Popen(cmd)
-                            processes[idx] = (new_p, cmd, s_idx)
-                            print(f"[WATCHDOG] Stream {s_idx} restarted (New PID: {new_p.pid})")
-            except KeyboardInterrupt:
-                print("\n[SYSTEM] Shutting down all streams...")
-                for p, _, _ in processes:
-                    p.terminate()
-                    try:
-                        p.wait(timeout=3)
-                    except subprocess.TimeoutExpired:
-                        print(f"[SYSTEM] Force killing PID {p.pid}")
-                        p.kill()
-            sys.exit(0)
+    def _parse_stream_indices(indices_text: str, total_streams: int) -> list:
+        parsed = []
+        seen = set()
+        for token in indices_text.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if not token.isdigit():
+                raise ValueError(f"Invalid stream index '{token}'. Use comma-separated integers like 0,2,4")
+            idx = int(token)
+            if idx < 0 or idx >= total_streams:
+                raise ValueError(f"Invalid stream-index {idx}. Available streams: 0 to {total_streams - 1}.")
+            if idx not in seen:
+                parsed.append(idx)
+                seen.add(idx)
+        if not parsed:
+            raise ValueError("No valid stream indexes provided.")
+        return parsed
+
+    if args.stream_indices is not None:
+        if args.video_source is not None:
+            print("[ERROR] video_source override is only supported with a single stream (--stream-index).")
+            sys.exit(1)
+        try:
+            selected_stream_indexes = _parse_stream_indices(args.stream_indices, len(config.STREAMS_CONFIG))
+        except ValueError as exc:
+            print(f"[ERROR] {exc}")
+            sys.exit(1)
+    elif args.stream_index is not None:
+        selected_stream_indexes = [args.stream_index]
+    elif args.video_source is not None:
+        # Backwards compatibility: if testing a specific video without stream-index, default to 0
+        selected_stream_indexes = [0]
+    else:
+        # No parameters provided -> run all streams in parallel
+        selected_stream_indexes = list(range(len(config.STREAMS_CONFIG)))
+
+    if len(selected_stream_indexes) > 1:
+        import subprocess
+        if len(selected_stream_indexes) == len(config.STREAMS_CONFIG):
+            print(f"[SYSTEM] No stream parameters provided. Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
+        else:
+            print(f"[SYSTEM] Launching selected streams in parallel: {selected_stream_indexes}")
+        processes = []
+
+        base_cmd = [sys.executable, sys.argv[0]]
+        if args.show:
+            print("[WARNING] --show enabled. OpenCV GUI rendering adds significant CPU/latency overhead and is NOT recommended for production.")
+            base_cmd.append("--show")
+        if args.scale_rois:
+            base_cmd.append("--scale-rois")
+        base_cmd.extend(["--process-every", str(args.process_every)])
+        base_cmd.extend(["--device", args.device])
+        if args.no_half:
+            base_cmd.append("--no-half")
+        if args.show_all_detections:
+            base_cmd.append("--show-all-detections")
+        if args.test_window:
+            base_cmd.extend(["--test-window", args.test_window])
+        if args.debug:
+            base_cmd.append("--debug")
+
+        for pos, i in enumerate(selected_stream_indexes):
+            cmd = base_cmd + ["--stream-index", str(i)]
+            p = subprocess.Popen(cmd)
+            processes.append((p, cmd, i))
+            print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
+
+            # Staggered Startup (Production Safety)
+            if pos < len(selected_stream_indexes) - 1:
+                delay = getattr(config, "STAGGER_START_DELAY", 2.0)
+                print(f"[SYSTEM] Waiting {delay}s before next launch...")
+                time.sleep(delay)
+
+        print("[SYSTEM] Selected streams launched. Supervisor active.")
+        try:
+            while True:
+                time.sleep(5)
+                # Watchdog / Supervisor logic
+                for idx, (p, cmd, s_idx) in enumerate(processes):
+                    if p.poll() is not None:
+                        print(f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died with code {p.returncode}. Restarting...")
+                        new_p = subprocess.Popen(cmd)
+                        processes[idx] = (new_p, cmd, s_idx)
+                        print(f"[WATCHDOG] Stream {s_idx} restarted (New PID: {new_p.pid})")
+        except KeyboardInterrupt:
+            print("\n[SYSTEM] Shutting down selected streams...")
+            for p, _, _ in processes:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    print(f"[SYSTEM] Force killing PID {p.pid}")
+                    p.kill()
+        sys.exit(0)
+
+    args.stream_index = selected_stream_indexes[0]
 
     if args.stream_index < 0 or args.stream_index >= len(config.STREAMS_CONFIG):
         print(f"[ERROR] Invalid stream-index {args.stream_index}. Available streams: 0 to {len(config.STREAMS_CONFIG)-1}.")
