@@ -161,13 +161,13 @@ STREAMS_CONFIG = [
         # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
         # High SSIM threshold never fires on low-texture patches.
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
-        "ssim_threshold": 0.60,
-        "debounce_threshold": 20,
+        "ssim_threshold": 0.40,
+        "debounce_threshold": 25,
         "intensity_threshold": 50,
         "motion_threshold": 3.0,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 7.0,
+        "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
