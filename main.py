@@ -527,7 +527,7 @@ def main(
                 is_evening_window = (test_window == "evening")
             else:
                 is_morning_window = "06:00" <= curr_hour_min <= "11:00"
-                is_evening_window = "12:30" <= curr_hour_min <= "23:58"
+                is_evening_window = "11:01" <= curr_hour_min <= "23:58"  # Closes the 11:00–12:30 dead zone
             
             current_auth_window = None
             if is_morning_window and not morning_check_done:
@@ -788,7 +788,7 @@ def main(
                         state_machine.session["door_open_captured"] = True
                         morning_check_done = True
                         print(f"[MORNING] Door already open at {curr_hour_min} IST. Flagging false authentication.")
-                        return # Skip further logic for this frame
+                        continue  # Skip rest of this frame — loop must keep running for daily reset
 
                 # 2. Transition Detection (Checked every frame)
                 if door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
@@ -816,7 +816,7 @@ def main(
                         state_machine.session["door_open_captured"] = True
                         morning_post_open_started = False
                         morning_check_done = True
-                        return
+                        # No return — loop must keep running for midnight reset and evening window
 
                 # 3. Ongoing Grace Window Logic
                 if morning_post_open_started:
@@ -1110,16 +1110,38 @@ if __name__ == "__main__":
     if video_source is not None and video_source.isdigit():
         video_source = int(video_source)
 
-    main(
-        stream_config=stream_config,
-        video_source=video_source,
-        show_live=args.show,
-        scale_rois=args.scale_rois,
-        process_every=args.process_every,
-        device=args.device,
-        half=not args.no_half,
-        show_all_detections=args.show_all_detections,
-        test_window=args.test_window,
-        debug=args.debug,
+    # ── Production restart wrapper ────────────────────────────────────────────
+    # For single-stream mode (no watchdog parent), restart automatically on any
+    # unhandled exception or clean exit so the system runs 24/7.
+    # File/webcam sources (non-RTSP) exit cleanly when video ends — don't loop.
+    _is_live = video_source is None or (
+        isinstance(video_source, str) and video_source.lower().startswith("rtsp://")
     )
+    while True:
+        try:
+            main(
+                stream_config=stream_config,
+                video_source=video_source,
+                show_live=args.show,
+                scale_rois=args.scale_rois,
+                process_every=args.process_every,
+                device=args.device,
+                half=not args.no_half,
+                show_all_detections=args.show_all_detections,
+                test_window=args.test_window,
+                debug=args.debug,
+            )
+        except KeyboardInterrupt:
+            print("\n[SYSTEM] Interrupted by user. Exiting.")
+            break
+        except Exception as exc:
+            print(f"[SYSTEM] Unhandled exception in main(): {exc}")
+            import traceback; traceback.print_exc()
+        
+        if not _is_live:
+            # Non-RTSP source (file/webcam) — don't auto-restart after video ends
+            break
+        
+        print("[SYSTEM] Restarting stream in 10 seconds...")
+        time.sleep(10)
 
