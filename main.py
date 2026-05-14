@@ -384,7 +384,7 @@ def main(
             stream_debounce = int(stream_config.get("debounce_threshold", config.DOOR_DEBOUNCE_FRAMES))
 
             # Basic validation / clamping to avoid accidental misconfiguration
-            stream_ssim_thresh = min(max(stream_ssim_thresh, 0.5), 0.99)
+            stream_ssim_thresh = min(max(stream_ssim_thresh, 0.05), 0.99)
             if stream_intensity_thresh is not None:
                 stream_intensity_thresh = float(max(stream_intensity_thresh, 0.0))
             if stream_motion_thresh is not None:
@@ -744,8 +744,12 @@ def main(
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
                 visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
                                             (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                persons_auth_status = False  # Set before capture so screenshot shows UNAVAILABLE
-                _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
+                
+                # Prevent duplicate captures of the same violation
+                if "SAME_ID" not in state_machine.session["captured_violations"]:
+                    persons_auth_status = False  # Set before capture so screenshot shows UNAVAILABLE
+                    _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
+                    state_machine.session["captured_violations"].append("SAME_ID")
 
                 if current_auth_window == "evening":
                     evening_check_done = True

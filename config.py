@@ -133,7 +133,7 @@ STREAMS_CONFIG = [
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
         "camera_id": "GF-2-CAM-21",
         "site_id": "2",
-        "site_name": "jubliee_hills",
+        "site_name": "jubilee_hills",
         "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
         "ssim_threshold": 0.50,
         "debounce_threshold": 20,
@@ -204,6 +204,29 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(545, 897), (544, 1103), (1165, 1050), (1154, 853)], np.int32),
             "INTERACTION_ZONE": np.array([(0, 8), (0, 1340), (1902, 1416), (2076, 11)], np.int32)
         }
+    },
+    # Stream 5
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.103:8002/Streaming/Channels/2101",
+        "camera_id": "FF-3-CAM-21",
+        "site_id": "3",
+        "site_name": "vizag",
+        "closed_door_reference": "close_doors/closed_FF-3-CAM-21.jpg",
+        "ssim_threshold": 0.32,
+        "debounce_threshold":2,
+        "intensity_threshold": 70,
+        "motion_threshold": 5.0,
+        "min_unlock_seconds": 0.5,
+        "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 4.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(1116, 411), (983, 528), (1293, 664), (1569, 607)], np.int32),
+            "LOCKS_ROI":  np.array([(955, 2), (1046, 251), (1523, 192), (1523, 192), (1537, 2)], np.int32),
+            "DOOR_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
+            "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
+        }
     }
 ]
 
@@ -227,6 +250,7 @@ def create_session():
         "grace_buffer_b": 0,
         "improper_positioning": None,
         "violation_type": None,
+        "captured_violations": [],
     }
 
 def calculate_min_unlock_frames(fps):
