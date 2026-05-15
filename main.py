@@ -632,7 +632,7 @@ def main(
                     # In morning window, we must ALWAYS check door state to catch the CLOSED->OPEN transition
                     # regardless of whether people are blocking the ROI (grace period handles the check).
                     check_door = (
-                        state_machine.should_check_door_state() 
+                        state_machine.should_check_door_state()
                         or (current_auth_window == "morning" and not morning_check_done)
                         or debug
                     )

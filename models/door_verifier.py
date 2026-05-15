@@ -104,32 +104,25 @@ class DoorVerifier:
                 self.last_ssim = float(ssim(self.reference_patch, curr_patch, full=False))
                 self.last_ssim = max(0.0, min(1.0, self.last_ssim))
 
-                texture_open = self.last_ssim < self.similarity_threshold
-                # Require SSIM drop in addition to intensity change to avoid false opens
-                # Only treat intensity change as an open signal if SSIM also indicates
-                # a texture-level change (prevents reflections/lighting spikes from flipping state)
-                intensity_open = (
-                    intensity_diff > self.intensity_threshold
-                    and self.last_ssim < self.similarity_threshold
-                )
+                # 2. Structural change (SSIM)
+                ssim_changed = self.last_ssim < self.similarity_threshold
+                # 3. Intensity validation
+                intensity_changed = intensity_diff > self.intensity_threshold
 
                 if curr_mean < 20.0:  # Blackout protection
                     raw_is_open = False
                 else:
-                    # Protect against sudden darkening (lights turned off) which
-                    # can reduce SSIM but does not mean the door opened. If the
-                    # patch is significantly darker than the reference (by at
-                    # least the intensity threshold), require a stronger SSIM
-                    # drop before treating it as an OPEN event. This behavior
-                    # can be disabled via the `darkening_protection` flag.
+                    # Darkening protection: scene significantly darker than reference
+                    # means lights turned off — SSIM drops but door hasn't moved.
+                    # Hold last stable state so lights-off → lights-on never triggers.
                     if self.darkening_protection and curr_mean < (self.reference_mean - self.intensity_threshold):
-                        # Scene is significantly darker than reference = lights turned off.
-                        # SSIM naturally drops against a bright reference regardless of door
-                        # state, so it cannot be trusted here. Hold the last stable state so
-                        # a lights-off → lights-on cycle never produces a spurious transition.
                         raw_is_open = self.stable_is_open
                     else:
-                        raw_is_open = texture_open or intensity_open
+                        # Multi-signal AND: motion (gate above) + structural + intensity
+                        # all three must agree before raw_is_open = True.
+                        # Single-signal failures from sunlight, IR switch, exposure
+                        # drift, or compression cannot alone produce a false open.
+                        raw_is_open = ssim_changed and intensity_changed
 
             # Debounce Logic
             if raw_is_open == self.candidate_state:
