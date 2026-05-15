@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
-from typing import Optional
+from typing import Dict, Optional
 import config
 
 class DoorVerifier:
@@ -19,12 +19,14 @@ class DoorVerifier:
         intensity_threshold: float = None,
         motion_threshold: float = None,
         darkening_protection: bool = True,
+        min_visible_ratio: float = None,
     ):
         reference = cv2.imread(reference_image_path)
         if reference is None:
             raise FileNotFoundError(f"Cannot load reference image: {reference_image_path}")
 
         self.rx, self.ry, self.rw, self.rh = cv2.boundingRect(door_corner_roi)
+        self._door_corner_polygon = door_corner_roi.reshape(-1, 2).astype(np.int32)
         ref_crop = reference[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
         raw_patch = cv2.cvtColor(ref_crop, cv2.COLOR_BGR2GRAY)
 
@@ -42,10 +44,19 @@ class DoorVerifier:
         self.reference_mean = np.mean(self.reference_patch)
         ref_std = float(np.std(self.reference_patch))
 
+        self._roi_mask = self._build_roi_mask()
+        self._roi_area_pixels = int(np.count_nonzero(self._roi_mask))
+        self.last_visible_ratio = 1.0
+
         self.similarity_threshold = similarity_threshold
         self.intensity_threshold = intensity_threshold if intensity_threshold is not None else 25
         self.debounce_threshold = debounce_threshold
         self.darkening_protection = bool(darkening_protection)
+        self.min_visible_ratio = (
+            float(min_visible_ratio)
+            if min_visible_ratio is not None
+            else float(config.DOOR_CORNER_MIN_VISIBLE_RATIO)
+        )
 
         # Motion gate: for very low-texture patches (flat door surface) the
         # configured threshold can be higher than the actual per-pixel change a
@@ -74,74 +85,117 @@ class DoorVerifier:
             f"{'(adaptive)' if ref_std < 10.0 else ''} debounce_frames={self.debounce_threshold}"
         )
 
-    def verify(self, frame: np.ndarray) -> bool:
+    def _build_roi_mask(self) -> np.ndarray:
+        mask = np.zeros((self.ssim_size[1], self.ssim_size[0]), dtype=np.uint8)
+        local_polygon = self._door_corner_polygon.astype(np.float32)
+        local_polygon[:, 0] = (local_polygon[:, 0] - self.rx) * self.ssim_size[0] / max(self.rw, 1)
+        local_polygon[:, 1] = (local_polygon[:, 1] - self.ry) * self.ssim_size[1] / max(self.rh, 1)
+        local_polygon = np.rint(local_polygon).astype(np.int32)
+        cv2.fillPoly(mask, [local_polygon], 1)
+        return mask
+
+    def _build_visible_mask(self, tracked_persons: Optional[Dict[int, Dict]]) -> np.ndarray:
+        occlusion_mask = np.zeros_like(self._roi_mask, dtype=np.uint8)
+        if tracked_persons:
+            scale_x = self.ssim_size[0] / max(self.rw, 1)
+            scale_y = self.ssim_size[1] / max(self.rh, 1)
+            for person in tracked_persons.values():
+                bbox = person.get("bbox")
+                if bbox is None or len(bbox) < 4:
+                    continue
+                x1 = max(float(bbox[0]), float(self.rx))
+                y1 = max(float(bbox[1]), float(self.ry))
+                x2 = min(float(bbox[2]), float(self.rx + self.rw))
+                y2 = min(float(bbox[3]), float(self.ry + self.rh))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+
+                lx1 = int(np.floor((x1 - self.rx) * scale_x))
+                ly1 = int(np.floor((y1 - self.ry) * scale_y))
+                lx2 = int(np.ceil((x2 - self.rx) * scale_x))
+                ly2 = int(np.ceil((y2 - self.ry) * scale_y))
+
+                lx1 = max(0, min(lx1, self.ssim_size[0] - 1))
+                ly1 = max(0, min(ly1, self.ssim_size[1] - 1))
+                lx2 = max(0, min(lx2, self.ssim_size[0]))
+                ly2 = max(0, min(ly2, self.ssim_size[1]))
+                if lx2 <= lx1 or ly2 <= ly1:
+                    continue
+
+                cv2.rectangle(occlusion_mask, (lx1, ly1), (lx2 - 1, ly2 - 1), 1, thickness=-1)
+
+        visible_mask = np.where((self._roi_mask == 1) & (occlusion_mask == 0), 1, 0).astype(np.uint8)
+        visible_pixels = int(np.count_nonzero(visible_mask))
+        self.last_visible_ratio = (visible_pixels / self._roi_area_pixels) if self._roi_area_pixels else 0.0
+        return visible_mask
+
+    def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray) -> bool:
+        self.reference_mean = np.mean(reference_patch)
+
+        curr_mean = float(np.mean(curr_patch))
+
+        pixel_diff = cv2.absdiff(curr_patch, reference_patch)
+        mean_diff = float(np.mean(pixel_diff))
+        self.last_mean_diff = mean_diff
+        self.last_curr_mean = curr_mean
+        self.last_intensity_diff = abs(curr_mean - self.reference_mean)
+
+        if mean_diff < self.motion_threshold:
+            raw_is_open = False
+            self.last_ssim = 1.0
+        else:
+            intensity_diff = self.last_intensity_diff
+
+            self.last_ssim = float(ssim(reference_patch, curr_patch, full=False))
+            self.last_ssim = max(0.0, min(1.0, self.last_ssim))
+
+            ssim_changed = self.last_ssim < self.similarity_threshold
+            intensity_changed = intensity_diff > self.intensity_threshold
+
+            if curr_mean < 20.0:
+                raw_is_open = False
+            else:
+                if intensity_changed:
+                    ssim_changed = self.last_ssim < self.similarity_threshold
+                    raw_is_open = ssim_changed
+                else:
+                    raw_is_open = False
+
+        if raw_is_open == self.candidate_state:
+            self.consecutive_frames_agreed += 1
+        else:
+            self.candidate_state = raw_is_open
+            self.consecutive_frames_agreed = 1
+
+        self._frame_tick += 1
+        if self._frame_tick % 30 == 0:
+            print(f"[DOOR] SSIM: {self.last_ssim:.3f} | Diff: {self.last_mean_diff:.1f} | "
+                f"Intensity: {self.last_curr_mean:.1f} (Δ{self.last_intensity_diff:.1f}) | "
+                f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'}")
+
+        if self.consecutive_frames_agreed >= self.debounce_threshold:
+            if self.stable_is_open != self.candidate_state:
+                print(f"[DOOR] *** STATE CHANGE: {'OPEN' if self.candidate_state else 'CLOSED'} ***")
+                self.stable_is_open = self.candidate_state
+            self.consecutive_frames_agreed = self.debounce_threshold
+
+        return self.stable_is_open
+
+    def verify(self, frame: np.ndarray, tracked_persons: Optional[Dict[int, Dict]] = None) -> bool:
         """Returns True if door is OPEN, False if CLOSED with motion gating."""
         try:
             curr_crop = frame[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
             curr_patch_raw = cv2.cvtColor(curr_crop, cv2.COLOR_BGR2GRAY)
             curr_patch = cv2.resize(curr_patch_raw, self.ssim_size)
 
-            # Precompute current mean for intensity/logging
-            curr_mean = float(np.mean(curr_patch))
+            visible_mask = self._build_visible_mask(tracked_persons)
+            if self.last_visible_ratio < self.min_visible_ratio:
+                return self.stable_is_open
 
-            # 1. Motion Gate (Cheap Pixel-Diff) - Highest Efficiency Gain
-            # If the patch hasn't changed at all, skip SSIM entirely
-            pixel_diff = cv2.absdiff(curr_patch, self.reference_patch)
-            mean_diff = float(np.mean(pixel_diff))
-            self.last_mean_diff = mean_diff
-            self.last_curr_mean = curr_mean
-            self.last_intensity_diff = abs(curr_mean - self.reference_mean)
+            masked_curr = self.reference_patch.copy()
+            masked_curr[visible_mask == 1] = curr_patch[visible_mask == 1]
 
-            if mean_diff < self.motion_threshold:
-                # No significant motion/lighting change - keep current raw state
-                raw_is_open = False # Matches reference (CLOSED)
-                self.last_ssim = 1.0
-            else:
-                # 2. Mean Intensity Check
-                intensity_diff = self.last_intensity_diff
-
-                # 3. Optimized SSIM (on downscaled patch)
-                self.last_ssim = float(ssim(self.reference_patch, curr_patch, full=False))
-                self.last_ssim = max(0.0, min(1.0, self.last_ssim))
-
-                # 2. Structural change (SSIM)
-                ssim_changed = self.last_ssim < self.similarity_threshold
-                # 3. Intensity validation
-                intensity_changed = intensity_diff > self.intensity_threshold
-
-                if curr_mean < 20.0:  # Blackout protection
-                    raw_is_open = False
-                else:
-                    # Intensity Gate: brightness shift must be present (Day->Night or Door Open)
-                    # before we even consider the structural SSIM change.
-                    if intensity_changed:
-                        # Structural change (SSIM)
-                        ssim_changed = self.last_ssim < self.similarity_threshold
-                        raw_is_open = ssim_changed
-                    else:
-                        # Brightness is stable; door is likely closed (matches reference)
-                        raw_is_open = False
-
-            # Debounce Logic
-            if raw_is_open == self.candidate_state:
-                self.consecutive_frames_agreed += 1
-            else:
-                self.candidate_state = raw_is_open
-                self.consecutive_frames_agreed = 1
-
-            self._frame_tick += 1
-            if self._frame_tick % 30 == 0:
-                print(f"[DOOR] SSIM: {self.last_ssim:.3f} | Diff: {self.last_mean_diff:.1f} | "
-                    f"Intensity: {self.last_curr_mean:.1f} (Δ{self.last_intensity_diff:.1f}) | "
-                    f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'}")
-
-            if self.consecutive_frames_agreed >= self.debounce_threshold:
-                if self.stable_is_open != self.candidate_state:
-                    print(f"[DOOR] *** STATE CHANGE: {'OPEN' if self.candidate_state else 'CLOSED'} ***")
-                    self.stable_is_open = self.candidate_state
-                self.consecutive_frames_agreed = self.debounce_threshold
-
-            return self.stable_is_open
+            return self._run_verification(masked_curr, self.reference_patch)
 
         except Exception as e:
             print(f"[DoorVerifier] Error: {e}")

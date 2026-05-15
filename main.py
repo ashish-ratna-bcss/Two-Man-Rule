@@ -421,6 +421,7 @@ def main(
             stream_intensity_thresh = stream_config.get("intensity_threshold", None)
             stream_motion_thresh = stream_config.get("motion_threshold", None)
             stream_debounce = int(stream_config.get("debounce_threshold", config.DOOR_DEBOUNCE_FRAMES))
+            stream_min_visible_ratio = float(stream_config.get("door_corner_min_visible_ratio", config.DOOR_CORNER_MIN_VISIBLE_RATIO))
 
             # Basic validation / clamping to avoid accidental misconfiguration
             stream_ssim_thresh = min(max(stream_ssim_thresh, 0.05), 0.99)
@@ -429,6 +430,7 @@ def main(
             if stream_motion_thresh is not None:
                 stream_motion_thresh = float(max(stream_motion_thresh, 0.0))
             stream_debounce = int(min(max(stream_debounce, 1), 600))
+            stream_min_visible_ratio = min(max(stream_min_visible_ratio, 0.0), 1.0)
 
             stream_darkening = stream_config.get("darkening_protection", config.DOOR_DARKENING_PROTECTION)
 
@@ -440,8 +442,12 @@ def main(
                 intensity_threshold=stream_intensity_thresh,
                 motion_threshold=stream_motion_thresh,
                 darkening_protection=bool(stream_darkening),
+                min_visible_ratio=stream_min_visible_ratio,
             )
-            print(f"[SYSTEM] Door verifier loaded with threshold {stream_ssim_thresh}")
+            print(
+                f"[SYSTEM] Door verifier loaded with threshold {stream_ssim_thresh} "
+                f"and min_visible_ratio={stream_min_visible_ratio:.2f}"
+            )
         except FileNotFoundError as e:
             print(f"[WARNING] {e}")
             door_verifier = None
@@ -565,8 +571,8 @@ def main(
                 is_morning_window = (test_window == "morning")
                 is_evening_window = (test_window == "evening")
             else:
-                is_morning_window = "06:00" <= curr_hour_min <= "11:00"
-                is_evening_window = "11:01" <= curr_hour_min <= "23:58"  # Closes the 11:00–12:30 dead zone
+                is_morning_window = "07:00" <= curr_hour_min <= "11:00"
+                is_evening_window = "20:00" <= curr_hour_min <= "23:00"
             
             current_auth_window = None
             if is_morning_window and not morning_check_done:
@@ -635,7 +641,7 @@ def main(
                         or debug
                     )
                     if check_door:
-                        is_door_open = door_verifier.verify(frame)
+                        is_door_open = door_verifier.verify(frame, tracked_persons=tracked_persons)
                     else:
                         is_door_open = last_door_state if last_door_state is not None else False
                         

@@ -57,6 +57,8 @@ SSIM_THRESHOLD = 0.92
 DOOR_DEBOUNCE_FRAMES = 20
 # Global toggle to enable special darkening (lights-off) protection
 DOOR_DARKENING_PROTECTION = True
+# Minimum visible area ratio required before using occlusion-aware door verification
+DOOR_CORNER_MIN_VISIBLE_RATIO = 0.5
 
 # ============ ALERT SYSTEM ============
 
@@ -90,8 +92,9 @@ STREAMS_CONFIG = [
         # shift, so 0.92 never fires.  0.80 gives reliable open detection.
         "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 1,
+        "intensity_threshold": 6,
         "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -114,8 +117,9 @@ STREAMS_CONFIG = [
         "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 1,
+        "intensity_threshold": 6,
         "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -137,8 +141,9 @@ STREAMS_CONFIG = [
         "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 1,
+        "intensity_threshold": 6,
         "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
@@ -163,8 +168,9 @@ STREAMS_CONFIG = [
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
         "ssim_threshold": 0.80,
         "debounce_threshold": 25,
-        "intensity_threshold": 1,
+        "intensity_threshold": 10,
         "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 3.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
@@ -191,8 +197,9 @@ STREAMS_CONFIG = [
         "closed_door_reference": "close_doors/closed_GF-5-CAM-40.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 1,
+        "intensity_threshold": 8,
         "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
@@ -214,8 +221,9 @@ STREAMS_CONFIG = [
         "closed_door_reference": "close_doors/closed_FF-3-CAM-21.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 7,
-        "intensity_threshold": 1,
+        "intensity_threshold": 12,
         "motion_threshold": 5.0,
+        "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 0.5,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
