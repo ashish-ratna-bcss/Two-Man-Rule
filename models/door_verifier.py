@@ -112,17 +112,15 @@ class DoorVerifier:
                 if curr_mean < 20.0:  # Blackout protection
                     raw_is_open = False
                 else:
-                    # Darkening protection: scene significantly darker than reference
-                    # means lights turned off — SSIM drops but door hasn't moved.
-                    # Hold last stable state so lights-off → lights-on never triggers.
-                    if self.darkening_protection and curr_mean < (self.reference_mean - self.intensity_threshold):
-                        raw_is_open = self.stable_is_open
+                    # Intensity Gate: brightness shift must be present (Day->Night or Door Open)
+                    # before we even consider the structural SSIM change.
+                    if intensity_changed:
+                        # Structural change (SSIM)
+                        ssim_changed = self.last_ssim < self.similarity_threshold
+                        raw_is_open = ssim_changed
                     else:
-                        # Multi-signal AND: motion (gate above) + structural + intensity
-                        # all three must agree before raw_is_open = True.
-                        # Single-signal failures from sunlight, IR switch, exposure
-                        # drift, or compression cannot alone produce a false open.
-                        raw_is_open = ssim_changed and intensity_changed
+                        # Brightness is stable; door is likely closed (matches reference)
+                        raw_is_open = False
 
             # Debounce Logic
             if raw_is_open == self.candidate_state:

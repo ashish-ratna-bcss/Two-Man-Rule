@@ -506,7 +506,6 @@ def main(
             "morning": False,
             "evening": False,
         }
-        morning_initial_door_checked = False
         evening_auth_started = False
         last_door_state = None  # To detect transitions
         is_door_open = False
@@ -555,7 +554,6 @@ def main(
                     "evening": False,
                 }
                 active_auth_window = None
-                morning_initial_door_checked = False
                 evening_auth_started = False
                 state_machine.reset_session()
                 last_reset_date = today_str
@@ -584,7 +582,6 @@ def main(
                     print(f"[SYSTEM] Starting {current_auth_window} auth window with a fresh auth session.")
 
                 state_machine.reset_session()
-                morning_initial_door_checked = False
                 evening_auth_started = False
                 tracked_persons = {}
                 occupancy_status = "OK"
@@ -633,7 +630,8 @@ def main(
                     # regardless of whether people are blocking the ROI (grace period handles the check).
                     check_door = (
                         state_machine.should_check_door_state()
-                        or (current_auth_window == "morning" and not morning_check_done)
+                        or (current_auth_window == "morning" and not morning_check_done and (state_machine.session.get("id_a") is not None or state_machine.session.get("id_b") is not None))
+                        or (current_auth_window == "evening" and not evening_check_done)
                         or debug
                     )
                     if check_door:
@@ -828,22 +826,7 @@ def main(
             # ===== MORNING CHECK (CLOSED -> OPEN) =====
             # ===== MORNING CHECK (CLOSED -> OPEN) =====
             if is_morning_window and not morning_check_done:
-                # 1. Initial State Check
-                if not morning_initial_door_checked and not door_transition_pending:
-                    morning_initial_door_checked = True
-                    if is_door_open:
-                        persons_auth_status = False
-                        _capture("DOOR_OPENED_EARLIER_THIS_SESSION", {
-                            "authorized": False,
-                            "door_state": "OPEN",
-                            "reason": "door_opened_earlier_this_session",
-                        }, "Morning")
-                        state_machine.session["door_open_captured"] = True
-                        morning_check_done = True
-                        print(f"[MORNING] Door already open at {curr_hour_min} IST. Flagging false authentication.")
-                        continue  # Skip rest of this frame — loop must keep running for daily reset
-
-                # 2. Transition Detection (Checked every frame)
+                # Transition Detection (Checked every frame)
                 if door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
                     morning_post_open_started = True
                     morning_post_open_start_frame = frame_idx
@@ -911,7 +894,10 @@ def main(
                 
                 # 4. Idle/Waiting Display (if not in grace window and not done)
                 elif not morning_check_done:
-                    if auth_result["authorized"]:
+                    if door_transition_pending:
+                        visualizer.draw_status_text(frame, "STATUS: DOOR STATE STABILIZING...",
+                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                    elif auth_result["authorized"]:
                         visualizer.draw_status_text(frame, "MORNING CHECK: 2 UNLOCKERS READY - WAITING FOR CLOSED->OPEN",
                                                     (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
                     else:
@@ -962,10 +948,12 @@ def main(
                         visualizer.draw_status_text(frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
                                                     (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
                 else:
-                    if not is_door_open and not door_transition_pending and last_door_state is not None:
-                        evening_check_done = True
-                        print(f"[EVENING] Door already closed at {curr_hour_min} IST. Skipping evening check for today.")
+                    if door_transition_pending:
+                        visualizer.draw_status_text(frame, "STATUS: DOOR STATE STABILIZING...",
+                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
                     else:
+                        # Removed 'Door already closed' auto-skip logic to prevent premature completion
+                        # when door status is flickering or in a neutral state at window start.
                         visualizer.draw_status_text(frame, "STATUS: EVENING WINDOW OPEN - WATCHING FOR OPEN->CLOSE",
                                                     (10, 130), color=(0, 165, 255))
             

@@ -88,9 +88,9 @@ STREAMS_CONFIG = [
         # Lowered from 0.92: DOOR_CORNER patch is flat dark door surface (std≈2.4).
         # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
         # shift, so 0.92 never fires.  0.80 gives reliable open detection.
-        "ssim_threshold": 0.65,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 40,
+        "intensity_threshold": 1,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
@@ -112,9 +112,9 @@ STREAMS_CONFIG = [
         "site_id": "1",
         "site_name": "somajiguda",
         "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
-        "ssim_threshold": 0.75,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 35,
+        "intensity_threshold": 1,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
@@ -135,9 +135,9 @@ STREAMS_CONFIG = [
         "site_id": "2",
         "site_name": "jubilee_hills",
         "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
-        "ssim_threshold": 0.50,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 35,
+        "intensity_threshold": 1,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
@@ -161,11 +161,11 @@ STREAMS_CONFIG = [
         # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
         # High SSIM threshold never fires on low-texture patches.
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
-        "ssim_threshold": 0.20,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 25,
-        "intensity_threshold": 50,
+        "intensity_threshold": 1,
         "motion_threshold": 3.0,
-        "min_unlock_seconds": 4.0,
+        "min_unlock_seconds": 3.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -189,9 +189,9 @@ STREAMS_CONFIG = [
         "site_id": "5",
         "site_name": "jayanagar",
         "closed_door_reference": "close_doors/closed_GF-5-CAM-40.jpg",
-        "ssim_threshold": 0.65,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 20,
-        "intensity_threshold": 40,
+        "intensity_threshold": 1,
         "motion_threshold": 3.0,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
@@ -212,9 +212,9 @@ STREAMS_CONFIG = [
         "site_id": "3",
         "site_name": "vizag",
         "closed_door_reference": "close_doors/closed_FF-3-CAM-21.jpg",
-        "ssim_threshold": 0.32,
-        "debounce_threshold":2,
-        "intensity_threshold": 70,
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 7,
+        "intensity_threshold": 1,
         "motion_threshold": 5.0,
         "min_unlock_seconds": 0.5,
         "max_unlock_seconds": 10.0,
@@ -263,3 +263,4 @@ def calculate_min_unlock_frames(fps):
 def calculate_max_unlock_frames(fps):
     """Convert maximum unlock seconds to frame count based on actual video FPS."""
     return int(MAX_UNLOCK_SECONDS * fps)
+4
