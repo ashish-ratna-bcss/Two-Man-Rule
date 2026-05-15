@@ -161,7 +161,7 @@ STREAMS_CONFIG = [
         # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
         # High SSIM threshold never fires on low-texture patches.
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
-        "ssim_threshold": 0.40,
+        "ssim_threshold": 0.20,
         "debounce_threshold": 25,
         "intensity_threshold": 50,
         "motion_threshold": 3.0,
@@ -231,6 +231,7 @@ STREAMS_CONFIG = [
 ]
 
 BASE_OUTPUT_DIR = "strong_room_opening"
+BASE_LOG_DIR = "logs"
 
 def create_session():
     """Create a fresh session state dict."""
@@ -251,6 +252,8 @@ def create_session():
         "improper_positioning": None,
         "violation_type": None,
         "captured_violations": [],
+        "same_id_return_timer_frames": 0,
+        "same_id_return_grace_frames": 0,
     }
 
 def calculate_min_unlock_frames(fps):

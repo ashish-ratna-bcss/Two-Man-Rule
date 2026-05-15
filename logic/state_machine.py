@@ -313,14 +313,30 @@ class DualAuthStateMachine:
                     self.session["id_a_left_zone"] = True
                     
                 if self.session["id_a_left_zone"]:
-                    # Violation: same ID returns to door (head OR shoulder) and touches locks
-                    if (res.get("head_in_door") or res.get("shoulders_in_door")) and res.get("has_lock_contact"):
-                        print(f"[VIOLATION] P1 (ID {id_a}) returned to DOOR_ROI and interacting with LOCKS_ROI!")
-                        self.session["violation_type"] = "SAME_ID"
+                    at_door_contact = (
+                        (res.get("head_in_door") or res.get("shoulders_in_door"))
+                        and res.get("has_lock_contact")
+                    )
+                    if at_door_contact:
+                        timer = self.session.get("same_id_return_timer_frames", 0)
+                        timer = min(timer + frame_step, self.min_unlock_frames)
+                        self.session["same_id_return_timer_frames"] = timer
+                        self.session["same_id_return_grace_frames"] = config.GRACE_BUFFER_FRAMES
+                        if timer >= self.min_unlock_frames:
+                            print(f"[VIOLATION] P1 (ID {id_a}) confirmed SAME_ID re-attempt after {self.min_unlock_frames / self.fps:.1f}s")
+                            self.session["violation_type"] = "SAME_ID"
                     else:
-                        # Debug if they are interacting but not triggering violation
+                        grace = self.session.get("same_id_return_grace_frames", 0)
+                        timer = self.session.get("same_id_return_timer_frames", 0)
+                        if grace > 0 and timer > 0:
+                            self.session["same_id_return_grace_frames"] = max(grace - frame_step, 0)
+                            # timer pauses — holds value through brief dropout
+                        elif timer > 0:
+                            # grace expired — P1 disengaged, reset
+                            self.session["same_id_return_timer_frames"] = 0
+                            self.session["same_id_return_grace_frames"] = 0
                         if res.get("has_lock_contact"):
-                             print(f"[DEBUG] P1 (ID {id_a}) interacting with locks. head_in_door={res.get('head_in_door')} shoulders_in_door={res.get('shoulders_in_door')}")
+                            print(f"[DEBUG] P1 (ID {id_a}) lock contact but not at door. head_in_door={res.get('head_in_door')} shoulders_in_door={res.get('shoulders_in_door')}")
             else:
                 self.session["id_a_left_zone"] = True
 
