@@ -17,6 +17,8 @@ from logic.state_machine import DualAuthStateMachine
 from io_.video_handler import VideoHandler
 from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
+from io_.runtime_logger import RuntimeEventLogger
+from io_.terminal_tee import enable_terminal_capture
 import config
 import json
 
@@ -276,6 +278,7 @@ def capture(
     event_type: str,
     evidence_dir: str,
     cam_id: str,
+    site_name: str,
     site_id: str = "",
     details: dict = None,
     check_type: str = "System",
@@ -285,6 +288,8 @@ def capture(
     auth_result: dict = None,
     is_door_open: bool = False,
     persons_auth_status=None,
+    runtime_logger: RuntimeEventLogger = None,
+    frame_idx: int = None,
 ):
     """Unified capture + log helper. Saves annotated frame + paired JSON metadata."""
     now_ist = datetime.now(IST)
@@ -334,6 +339,25 @@ def capture(
         json_ok = False
 
     alert_system.log_event(event_type, details or {})
+    if runtime_logger is not None:
+        runtime_logger.write_event(
+            event_type="CAPTURE",
+            message=f"Capture saved for {event_type}",
+            level="INFO" if ok and json_ok else "ERROR",
+            details={
+                "source_event_type": event_type,
+                "check_type": check_type,
+                "site_name": site_name,
+                "site_id": site_id,
+                "cam_id": cam_id,
+                "image_path": full_path,
+                "json_path": json_path,
+                "image_ok": bool(ok),
+                "json_ok": bool(json_ok),
+                "event_details": details or {},
+            },
+            frame_idx=frame_idx,
+        )
     print(f"[CAPTURE] {event_type}: {full_path} (image={'OK' if ok else 'FAILED'}, json={'OK' if json_ok else 'FAILED'})")
     return full_path
 
@@ -354,10 +378,25 @@ def main(
     cam_id = stream_config["camera_id"]
     site_name = stream_config["site_name"]
     evidence_dir = os.path.join(config.BASE_OUTPUT_DIR, site_name, cam_id)
+    runtime_logger = RuntimeEventLogger(
+        base_dir=config.BASE_LOG_DIR,
+        site_name=site_name,
+        camera_id=cam_id,
+    )
 
     print(f"[SYSTEM] Initializing Two-Man Rule Monitoring System for {site_name} - {cam_id}...")
     _alert_counter[0] = 0
     os.makedirs(evidence_dir, exist_ok=True)
+    runtime_logger.write_event(
+        event_type="STREAM_START",
+        message="Stream worker initialized",
+        level="INFO",
+        details={
+            "video_source": str(video_source),
+            "evidence_dir": evidence_dir,
+            "log_file": runtime_logger.current_file_path,
+        },
+    )
 
 
     detector = PoseDetector(device=device, half=half)
@@ -427,7 +466,7 @@ def main(
             max_unlock_seconds=stream_max_unlock,
         )
         visualizer = Visualizer()
-        alert_system = AlertSystem(evidence_dir=evidence_dir)
+        alert_system = AlertSystem(evidence_dir=evidence_dir, runtime_logger=runtime_logger)
 
         # Determine initial state based on current IST time
         startup_ist = datetime.now(IST)
@@ -724,6 +763,7 @@ def main(
                     alert_system, clean_frame, event_type,
                     evidence_dir=evidence_dir,
                     cam_id=cam_id,
+                    site_name=site_name,
                     site_id=site_id,
                     details=details,
                     check_type=check_type,
@@ -733,6 +773,8 @@ def main(
                     auth_result=auth_result,
                     is_door_open=is_door_open,
                     persons_auth_status=persons_auth_status,
+                    runtime_logger=runtime_logger,
+                    frame_idx=frame_idx,
                 )
 
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
@@ -960,6 +1002,17 @@ def main(
                     "p2_id": state_machine.session.get("id_b")
                 })
                 auth_success_logged_by_window[active_auth_window] = True
+                runtime_logger.write_event(
+                    event_type="DUAL_AUTH_SUCCESS",
+                    message=f"Dual person authorization confirmed for {active_auth_window} window",
+                    level="INFO",
+                    details={
+                        "window": active_auth_window,
+                        "p1_id": state_machine.session.get("id_a"),
+                        "p2_id": state_machine.session.get("id_b"),
+                    },
+                    frame_idx=frame_idx,
+                )
                 print(f"[SYSTEM] Dual person authorization confirmed for {active_auth_window} window.")
 
             # ===== TEST WINDOW EXIT =====
@@ -1184,30 +1237,42 @@ if __name__ == "__main__":
         isinstance(video_source, str) and video_source.lower().startswith("rtsp://")
     )
     while True:
+        _restore_terminal_capture = enable_terminal_capture(
+            base_dir=config.BASE_LOG_DIR,
+            site_name=stream_config["site_name"],
+            camera_id=stream_config["camera_id"],
+        )
+        should_sleep_before_restart = False
         try:
-            main(
-                stream_config=stream_config,
-                video_source=video_source,
-                show_live=args.show,
-                scale_rois=args.scale_rois,
-                process_every=args.process_every,
-                device=args.device,
-                half=not args.no_half,
-                show_all_detections=args.show_all_detections,
-                test_window=args.test_window,
-                debug=args.debug,
-            )
-        except KeyboardInterrupt:
-            print("\n[SYSTEM] Interrupted by user. Exiting.")
-            break
-        except Exception as exc:
-            print(f"[SYSTEM] Unhandled exception in main(): {exc}")
-            import traceback; traceback.print_exc()
-        
-        if not _is_live:
-            # Non-RTSP source (file/webcam) — don't auto-restart after video ends
-            break
-        
-        print("[SYSTEM] Restarting stream in 10 seconds...")
-        time.sleep(10)
+            try:
+                main(
+                    stream_config=stream_config,
+                    video_source=video_source,
+                    show_live=args.show,
+                    scale_rois=args.scale_rois,
+                    process_every=args.process_every,
+                    device=args.device,
+                    half=not args.no_half,
+                    show_all_detections=args.show_all_detections,
+                    test_window=args.test_window,
+                    debug=args.debug,
+                )
+            except KeyboardInterrupt:
+                print("\n[SYSTEM] Interrupted by user. Exiting.")
+                break
+            except Exception as exc:
+                print(f"[SYSTEM] Unhandled exception in main(): {exc}")
+                import traceback; traceback.print_exc()
+
+            if not _is_live:
+                # Non-RTSP source (file/webcam) — don't auto-restart after video ends
+                break
+
+            print("[SYSTEM] Restarting stream in 10 seconds...")
+            should_sleep_before_restart = True
+        finally:
+            _restore_terminal_capture()
+
+        if should_sleep_before_restart:
+            time.sleep(10)
 
