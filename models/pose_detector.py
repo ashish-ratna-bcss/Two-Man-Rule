@@ -7,33 +7,39 @@ import config
 import time
 import os
 import multiprocessing as mp
-from multiprocessing.managers import BaseManager
+from multiprocessing.managers import BaseManager, DictProxy
 from multiprocessing import shared_memory
 
 class InferenceManager(BaseManager): pass
 
 def get_shared_queues(address=('127.0.0.1', 50000), authkey=b'pmj_auth'):
-    """Connect to a running InferenceManager and return the shared queues and shared memory info."""
+    """Connect to a running InferenceManager and return the shared queues.
+    
+    Architecture: single request queue + single response queue.
+    Workers tag requests with their client_id; server echoes the tag back.
+    Workers poll the shared response queue and discard messages not for them.
+    This avoids storing mp.Queue objects in a Manager dict (which is not picklable).
+    """
     InferenceManager.register('get_request_queue')
-    InferenceManager.register('get_response_queues')
-    InferenceManager.register('get_shared_memory_config')
+    InferenceManager.register('get_response_queue')
+    InferenceManager.register('get_shared_memory_config', proxytype=DictProxy)
     manager = InferenceManager(address=address, authkey=authkey)
     try:
         manager.connect()
         return (
-            manager.get_request_queue(), 
-            manager.get_response_queues(),
-            manager.get_shared_memory_config()
+            manager.get_request_queue(),
+            manager.get_response_queue(),
+            manager.get_shared_memory_config(),
         )
     except Exception as e:
         print(f"[InferenceManager] Could not connect to shared server: {e}")
         return None, None, None
 
-def start_inference_manager(request_q, response_qs, shm_config, address=('127.0.0.1', 50000), authkey=b'pmj_auth'):
+def start_inference_manager(request_q, response_q, shm_config, address=('127.0.0.1', 50000), authkey=b'pmj_auth'):
     """Start a manager server to host the shared queues and shm info."""
     InferenceManager.register('get_request_queue', callable=lambda: request_q)
-    InferenceManager.register('get_response_queues', callable=lambda: response_qs)
-    InferenceManager.register('get_shared_memory_config', callable=lambda: shm_config)
+    InferenceManager.register('get_response_queue', callable=lambda: response_q)
+    InferenceManager.register('get_shared_memory_config', callable=lambda: shm_config, proxytype=DictProxy)
     manager = InferenceManager(address=address, authkey=authkey)
     server = manager.get_server()
     return server
@@ -138,9 +144,8 @@ class PoseDetector:
             return []
 
     def _detect_shared(self, frame: np.ndarray) -> List[Dict]:
-        """Client-side logic for shared inference with SharedMemory support."""
+        """Client-side logic for shared inference with single tagged response queue."""
         if self._request_queue is None:
-            # Fall back to standalone if queues are missing (fail-safe)
             print("[PoseDetector] WARNING: Shared mode requested but no queues provided. Falling back to standalone.")
             self.shared_mode = False
             return self.detect(frame)
@@ -149,15 +154,11 @@ class PoseDetector:
             if self._shm_buf is not None and self._shm_slot_idx >= 0:
                 # Optimized Path: Copy frame to SharedMemory slot
                 offset = self._shm_slot_idx * self._shm_slot_size
-                # Ensure frame fits in slot
                 if frame.nbytes > self._shm_slot_size:
                     print(f"[PoseDetector] ERROR: Frame too large for SHM slot ({frame.nbytes} > {self._shm_slot_size})")
-                    # Fall back to passing the frame in the queue (slower but safe)
                     self._request_queue.put((self.client_id, frame))
                 else:
-                    # Write to buffer
                     self._shm_buf[offset:offset+frame.nbytes] = frame.tobytes()
-                    # Send metadata instead of the whole frame
                     metadata = {
                         "shm_slot": self._shm_slot_idx,
                         "shape": frame.shape,
@@ -169,11 +170,24 @@ class PoseDetector:
                 # Legacy Path: Pass the whole frame through the queue
                 self._request_queue.put((self.client_id, frame))
 
-            # Blocking wait for result
-            result = self._response_queue.get(timeout=5.0)
-            return result
+            # Poll shared response queue for a response tagged to this client.
+            # Other workers' responses are re-queued to avoid starving them.
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                try:
+                    tagged = self._response_queue.get(timeout=0.1)
+                    recv_id, result = tagged
+                    if recv_id == self.client_id:
+                        return result
+                    else:
+                        # Not ours — put it back for the correct worker
+                        self._response_queue.put(tagged)
+                except Exception:
+                    continue
+            print(f"[PoseDetector] Shared inference timeout for {self.client_id}")
+            return []
         except Exception as e:
-            print(f"[PoseDetector] Shared inference timeout or error: {e}")
+            print(f"[PoseDetector] Shared inference error: {e}")
             return []
 
     def _process_results(self, results) -> List[Dict]:
@@ -214,17 +228,14 @@ class PoseDetector:
         """Set the queues and shared memory used for shared mode."""
         self._request_queue = request_q
         self._response_queue = response_q
-        
-        if shm_config and 'name' in shm_config:
+
+        if shm_config and shm_config.get('name'):
             try:
                 self._shm = shared_memory.SharedMemory(name=shm_config['name'])
                 self._shm_buf = self._shm.buf
                 self._shm_slot_size = shm_config['slot_size']
-                # Determine slot index (assigned by manager based on client_id or sequential)
-                # In this implementation, we expect the manager to have assigned a slot_map
                 slot_map = shm_config.get('slot_map', {})
                 self._shm_slot_idx = slot_map.get(self.client_id, -1)
-                
                 if self._shm_slot_idx >= 0:
                     print(f"[PoseDetector] SharedMemory attached. Slot: {self._shm_slot_idx}")
                 else:
@@ -233,17 +244,9 @@ class PoseDetector:
                 print(f"[PoseDetector] Could not attach to SharedMemory: {e}")
 
     def cleanup(self):
-        """Cleanup: remove our response queue and detach from SHM."""
+        """Cleanup: detach from SHM."""
         if self._shm:
             self._shm.close()
-            
-        if self.shared_mode:
-            try:
-                _, res_qs, _ = get_shared_queues()
-                if res_qs is not None and self.client_id in res_qs:
-                    del res_qs[self.client_id]
-            except Exception as e:
-                print(f"[PoseDetector] Cleanup failed: {e}")
 
 
 class _InferenceServer:
@@ -261,18 +264,20 @@ class _InferenceServer:
         self.shm = None
         self.shm_slot_size = 0
 
-    def run(self, request_queue: mp.Queue, response_queues: Dict[str, mp.Queue], shm_name: str = None):
-        """Main loop for the inference server with SharedMemory support."""
+    def run(self, request_queue: mp.Queue, response_queue: mp.Queue, shm_name: str = None):
+        """Main loop for the inference server with SharedMemory support.
+        
+        Reads (client_id, payload) from request_queue.
+        Writes (client_id, result) to the single shared response_queue.
+        Workers filter responses by their own client_id.
+        """
         self.running = True
         print("[InferenceServer] Shared GPU Server process started.")
-        
-        # Attach to SharedMemory if provided
+
         if shm_name:
             try:
                 self.shm = shared_memory.SharedMemory(name=shm_name)
-                # We need to know slot size. For simplicity, we assume fixed size from config
-                # but in production we'd pass this in shm_config
-                self.shm_slot_size = (getattr(config, "MAX_SHARED_MEMORY_MB", 1024) * 1024 * 1024) // 100 # Default to 100 slots
+                self.shm_slot_size = (getattr(config, "MAX_SHARED_MEMORY_MB", 1024) * 1024 * 1024) // 100
                 print(f"[InferenceServer] SharedMemory attached for frame processing ({shm_name})")
             except Exception as e:
                 print(f"[InferenceServer] ERROR: Could not attach to SharedMemory {shm_name}: {e}")
@@ -280,12 +285,10 @@ class _InferenceServer:
         while self.running:
             requests = []
             try:
-                # Wait for first request (longer timeout for idle check)
                 req = request_queue.get(timeout=2.0)
                 requests.append(req)
                 self.last_active = time.time()
             except:
-                # Idle timeout check
                 if self.model is not None:
                     idle_time = time.time() - self.last_active
                     timeout = getattr(config, "GPU_IDLE_TIMEOUT", 300)
@@ -295,15 +298,13 @@ class _InferenceServer:
                         torch.cuda.empty_cache()
                 continue
 
-            # Load model if needed
             if self.model is None:
                 self._load_model()
 
-            # Dynamic Batching: collect more requests
             batch_limit = getattr(config, "BATCH_SIZE_LIMIT", 32)
             wait_ms = getattr(config, "INFERENCE_BATCH_WAIT_MS", 5)
             wait_start = time.perf_counter()
-            
+
             while len(requests) < batch_limit:
                 elapsed = (time.perf_counter() - wait_start) * 1000.0
                 remaining = wait_ms - elapsed
@@ -314,45 +315,39 @@ class _InferenceServer:
                 except:
                     break
 
-            # Batch Inference
             if requests:
                 client_ids = [r[0] for r in requests]
                 payloads = [r[1] for r in requests]
                 frames = []
-                
-                for i, payload in enumerate(payloads):
+
+                for payload in payloads:
                     if isinstance(payload, dict) and "shm_slot" in payload:
-                        # Read from SharedMemory
                         slot_idx = payload["shm_slot"]
                         shape = payload["shape"]
                         dtype = payload["dtype"]
                         nbytes = payload["nbytes"]
-                        
                         if self.shm:
                             offset = slot_idx * self.shm_slot_size
                             frame_bytes = self.shm.buf[offset : offset + nbytes]
                             frame = np.frombuffer(frame_bytes, dtype=dtype).reshape(shape).copy()
                             frames.append(frame)
                         else:
-                            print(f"[InferenceServer] ERROR: Received SHM payload but SHM is not initialized.")
+                            print(f"[InferenceServer] ERROR: Received SHM payload but SHM not initialized.")
                             frames.append(np.zeros(shape, dtype=dtype))
                     else:
-                        # Direct frame payload (legacy/fallback)
                         frames.append(payload)
 
                 try:
                     with torch.inference_mode():
                         results = self.model(frames, conf=0.5, verbose=False, half=self.half)
-                    
                     for i, client_id in enumerate(client_ids):
-                        if client_id in response_queues:
-                            processed = self._process_single_result(results[i])
-                            response_queues[client_id].put(processed)
+                        processed = self._process_single_result(results[i])
+                        # Tag the reply with client_id so workers can filter their own
+                        response_queue.put((client_id, processed))
                 except Exception as e:
                     print(f"[InferenceServer] Batch inference error: {e}")
                     for client_id in client_ids:
-                        if client_id in response_queues:
-                            response_queues[client_id].put([])
+                        response_queue.put((client_id, []))
 
     def _load_model(self):
         print(f"[InferenceServer] Initializing model into {self.device}...")

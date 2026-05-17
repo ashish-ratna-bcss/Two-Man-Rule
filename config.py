@@ -302,4 +302,4 @@ SHARED_INFERENCE_ENABLED = True  # Enabled by default for high-density scalabili
 BATCH_SIZE_LIMIT = 32             # Max frames to process in one GPU call
 INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
 GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
-MAX_SHARED_MEMORY_MB = 2048       # Buffer for passing frames between processes (2GB)
+MAX_SHARED_MEMORY_MB = 4096       # Buffer for passing frames between processes (4GB)

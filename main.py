@@ -408,20 +408,14 @@ def main(
 
     detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
     if shared_inference:
-        req_q, res_qs, shm_config = get_shared_queues()
-        if req_q and res_qs is not None:
-            # Create a dedicated response queue for this stream worker
-            # and register it in the shared manager's dict
-            res_q = mp.Queue()
-            res_qs[detector.client_id] = res_q
-            
-            # Use assigned SHM slot if provided via CLI, otherwise fallback
+        req_q, res_q, shm_config = get_shared_queues()
+        if req_q and res_q is not None:
+            # Use assigned SHM slot if provided via CLI
             if shm_config and 'shm_slot' in stream_config:
-                # We'll use the slot assigned during launch
-                if 'slot_map' not in shm_config:
-                    shm_config['slot_map'] = {}
-                shm_config['slot_map'][detector.client_id] = stream_config['shm_slot']
-                
+                slot_map = dict(shm_config.get('slot_map', {}))
+                slot_map[detector.client_id] = stream_config['shm_slot']
+                shm_config['slot_map'] = slot_map
+
             detector.set_queues(req_q, res_q, shm_config=shm_config)
         else:
             print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
@@ -1250,28 +1244,25 @@ if __name__ == "__main__":
                 print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to Queue-based passing.")
                 shm = None
 
-            # Create shared queues
-            req_q = mp.Queue()
-            # We use a Manager dict to hold queues for every client that connects
+            # All shared objects created via Manager for picklable proxies.
             manager = mp.Manager()
-            res_qs = manager.dict()
-            
-            shm_config = {
+            req_q = manager.Queue()   # Single request queue (all workers → server)
+            res_q = manager.Queue()   # Single response queue (server → workers, tagged)
+
+            shm_config = manager.dict({
                 'name': shm.name if shm else None,
-                'slot_size': shm_size // 100, # Support 100 slots
-                'slot_map': manager.dict() # Shared dict to store client_id -> slot_index mapping
-            }
-            
-            # Start the IPC manager server to share these queues with subprocesses
+                'slot_size': shm_size // 100,  # Support 100 SHM slots
+                'slot_map': {},
+            })
+
             from models.pose_detector import start_inference_manager
-            manager_server = start_inference_manager(req_q, res_qs, shm_config)
+            manager_server = start_inference_manager(req_q, res_q, shm_config)
             import threading
             threading.Thread(target=manager_server.serve_forever, daemon=True).start()
-            
-            # Start the actual GPU Inference Server process
+
             from models.pose_detector import _InferenceServer
             gpu_server = _InferenceServer(device=args.device, half=not args.no_half)
-            server_proc = mp.Process(target=gpu_server.run, args=(req_q, res_qs, shm.name if shm else None), daemon=True)
+            server_proc = mp.Process(target=gpu_server.run, args=(req_q, res_q, shm.name if shm else None), daemon=True)
             server_proc.start()
             print(f"[SYSTEM] GPU Master active (PID: {server_proc.pid}). Consolidating VRAM for {len(selected_stream_indexes)} streams.")
 
