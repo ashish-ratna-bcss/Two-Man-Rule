@@ -298,11 +298,13 @@ class DualAuthStateMachine:
         self.active_ids_in_zone = interacting_ids
         self._update_improper_positioning(pose_results)
 
-        # Catch if P1 (id_a) leaves and comes back to interact with the door again
+        # Catch if P1 (id_a) leaves or drops contact and comes back to interact with the door again
         id_a = self.session.get("id_a")
         if id_a is not None and self.session.get("id_b") is None:
             if "id_a_left_zone" not in self.session:
                 self.session["id_a_left_zone"] = False
+            if "id_a_dropped_contact" not in self.session:
+                self.session["id_a_dropped_contact"] = False
                 
             if id_a in pose_results:
                 res = pose_results[id_a]
@@ -311,8 +313,10 @@ class DualAuthStateMachine:
                 
                 if not at_door:
                     self.session["id_a_left_zone"] = True
+                if not res.get("has_lock_contact"):
+                    self.session["id_a_dropped_contact"] = True
                     
-                if self.session["id_a_left_zone"]:
+                if self.session["id_a_left_zone"] or self.session["id_a_dropped_contact"]:
                     at_door_contact = (
                         (res.get("head_in_door") or res.get("shoulders_in_door"))
                         and res.get("has_lock_contact")

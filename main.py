@@ -1,5 +1,6 @@
 # main.py
 import sys
+import multiprocessing as mp
 from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 import os
@@ -8,7 +9,8 @@ import numpy as np
 import argparse
 import time
 import math
-from models.pose_detector import PoseDetector
+import threading
+from models.pose_detector import PoseDetector, _InferenceServer, start_inference_manager, get_shared_queues
 from models.tracker import PersonTracker
 from models.door_verifier import DoorVerifier
 from logic.roi_manager import ROIManager
@@ -21,6 +23,9 @@ from io_.runtime_logger import RuntimeEventLogger
 from io_.terminal_tee import enable_terminal_capture
 import config
 import json
+
+# Global reference for cleanup in single-stream mode
+detector = None
 
 
 class _NumpySafeEncoder(json.JSONEncoder):
@@ -373,7 +378,9 @@ def main(
     show_all_detections: bool = False,
     test_window: str = None,
     debug: bool = False,
+    shared_inference: bool = False,
 ):
+    global detector
     video_source = video_source or stream_config["rtsp_url"]
     cam_id = stream_config["camera_id"]
     site_name = stream_config["site_name"]
@@ -399,7 +406,26 @@ def main(
     )
 
 
-    detector = PoseDetector(device=device, half=half)
+    detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
+    if shared_inference:
+        req_q, res_qs, shm_config = get_shared_queues()
+        if req_q and res_qs is not None:
+            # Create a dedicated response queue for this stream worker
+            # and register it in the shared manager's dict
+            res_q = mp.Queue()
+            res_qs[detector.client_id] = res_q
+            
+            # Use assigned SHM slot if provided via CLI, otherwise fallback
+            if shm_config and 'shm_slot' in stream_config:
+                # We'll use the slot assigned during launch
+                if 'slot_map' not in shm_config:
+                    shm_config['slot_map'] = {}
+                shm_config['slot_map'][detector.client_id] = stream_config['shm_slot']
+                
+            detector.set_queues(req_q, res_q, shm_config=shm_config)
+        else:
+            print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
+            detector.shared_mode = False
     tracker = PersonTracker()
 
     roi_manager = ROIManager()
@@ -602,6 +628,8 @@ def main(
             tracking_active = (
                 current_auth_window == "morning"
                 or (current_auth_window == "evening" and evening_auth_started)
+                or debug
+                or show_all_detections
             )
 
             # ===== PIPELINE =====
@@ -614,32 +642,46 @@ def main(
                 if tracking_active:
                     detections = detector.detect(frame)
                     tracked_persons = tracker.update(detections)
-                    occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
-                    state_machine.update_timers(tracked_persons, frame_step=frame_step)
-                    auth_result = state_machine.check_authorization()
-                else:
-                    tracked_persons = {}
-                    state_machine.active_ids_in_zone = set()
-                    state_machine.session["improper_positioning"] = None
-                    occupancy_status = "OK"
-                    auth_result = {
-                        "authorized": False,
-                        "lock_a_authorized": False,
-                        "lock_b_authorized": False,
-                        "violation_type": "INCOMPLETE",
-                    }
+                    
+                    auth_active = (
+                        current_auth_window == "morning"
+                        or (current_auth_window == "evening" and evening_auth_started)
+                        or (current_auth_window is None and (debug or show_all_detections))
+                    )
+                    
+                    if auth_active:
+                        occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
+                        state_machine.update_timers(tracked_persons, frame_step=frame_step)
+                        auth_result = state_machine.check_authorization()
+                    else:
+                        state_machine.active_ids_in_zone = set()
+                        state_machine.session["improper_positioning"] = None
+                        occupancy_status = "OK"
+                        auth_result = {
+                            "authorized": False,
+                            "lock_a_authorized": False,
+                            "lock_b_authorized": False,
+                            "violation_type": "INCOMPLETE",
+                        }
 
                 is_door_open = False
                 ssim_val = None
                 if door_verifier:
                     # In morning window, we must ALWAYS check door state to catch the CLOSED->OPEN transition
                     # regardless of whether people are blocking the ROI (grace period handles the check).
-                    check_door = (
-                        state_machine.should_check_door_state()
-                        or (current_auth_window == "morning" and not morning_check_done and (state_machine.session.get("id_a") is not None or state_machine.session.get("id_b") is not None))
-                        or (current_auth_window == "evening" and not evening_check_done)
-                        or debug
-                    )
+                    if current_auth_window == "morning" and not morning_check_done:
+                        check_door = (
+                            state_machine.session.get("id_a") is not None or 
+                            state_machine.session.get("id_b") is not None or
+                            state_machine.session.get("candidate_a") is not None or
+                            state_machine.session.get("candidate_b") is not None
+                        )
+                    elif current_auth_window == "evening" and not evening_check_done:
+                        check_door = True
+                    else:
+                        check_door = state_machine.should_check_door_state()
+                        
+                    check_door = check_door or debug
                     if check_door:
                         is_door_open = door_verifier.verify(frame, tracked_persons=tracked_persons)
                     else:
@@ -669,7 +711,7 @@ def main(
             draw_rois(visualizer, frame, active_rois)
 
             unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
-            if debug:
+            if debug or show_all_detections:
                 visible_pose_ids = set(tracked_persons.keys())
             else:
                 visible_pose_ids = set(unlocker_labels)
@@ -1029,7 +1071,12 @@ def main(
                 intensity_str = ""
                 if debug and ssim_val is not None and intensity_val is not None:
                     intensity_str = f" | Intensity: {intensity_val:.1f} (Δ{intensity_diff:.1f})"
-                print(f"[PROGRESS] Frame {frame_idx}/{total_frames} ({video.get_progress():.1f}%) "
+                
+                # Fix: Handle RTSP live streams which return negative or garbage total_frames
+                total_frames_val = total_frames if total_frames > 0 else "LIVE"
+                progress_val = f"({video.get_progress():.1f}%)" if total_frames > 0 else ""
+                
+                print(f"[PROGRESS] Frame {frame_idx}/{total_frames_val} {progress_val} "
                       f"| Unlockers: {n} | State: {state_machine.session['sequence_state']} "
                       f"| Candidates: P1={cand_a} P2={cand_b} "
                       f"| Verified: P1={id_a} P2={id_b} | {timers}{ssim_str}{intensity_str}")
@@ -1105,9 +1152,21 @@ if __name__ == "__main__":
         help="Test mode: force morning or evening window logic regardless of current time.",
     )
     parser.add_argument(
+        "--shared-inference",
+        action="store_true",
+        default=getattr(config, "SHARED_INFERENCE_ENABLED", False),
+        help="Enable shared GPU inference server to save VRAM across multiple streams.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Show all debug overlays on live window (ROIs, SSIM, AI stats, all detections). Screenshots remain clean.",
+    )
+    parser.add_argument(
+        "--shm-slot",
+        type=int,
+        default=-1,
+        help="Shared memory slot index assigned to this worker.",
     )
     args = parser.parse_args()
 
@@ -1177,8 +1236,49 @@ if __name__ == "__main__":
         if args.debug:
             base_cmd.append("--debug")
 
+        if args.shared_inference:
+            base_cmd.append("--shared-inference")
+            print("[SYSTEM] Shared Inference mode enabled. Initializing GPU Master...")
+            
+            # Create SharedMemory buffer
+            from multiprocessing.shared_memory import SharedMemory
+            shm_size = getattr(config, "MAX_SHARED_MEMORY_MB", 2048) * 1024 * 1024
+            try:
+                shm = SharedMemory(create=True, size=shm_size)
+                print(f"[SYSTEM] Created {shm_size/1024/1024:.0f}MB SharedMemory buffer: {shm.name}")
+            except Exception as e:
+                print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to Queue-based passing.")
+                shm = None
+
+            # Create shared queues
+            req_q = mp.Queue()
+            # We use a Manager dict to hold queues for every client that connects
+            manager = mp.Manager()
+            res_qs = manager.dict()
+            
+            shm_config = {
+                'name': shm.name if shm else None,
+                'slot_size': shm_size // 100, # Support 100 slots
+                'slot_map': manager.dict() # Shared dict to store client_id -> slot_index mapping
+            }
+            
+            # Start the IPC manager server to share these queues with subprocesses
+            from models.pose_detector import start_inference_manager
+            manager_server = start_inference_manager(req_q, res_qs, shm_config)
+            import threading
+            threading.Thread(target=manager_server.serve_forever, daemon=True).start()
+            
+            # Start the actual GPU Inference Server process
+            from models.pose_detector import _InferenceServer
+            gpu_server = _InferenceServer(device=args.device, half=not args.no_half)
+            server_proc = mp.Process(target=gpu_server.run, args=(req_q, res_qs, shm.name if shm else None), daemon=True)
+            server_proc.start()
+            print(f"[SYSTEM] GPU Master active (PID: {server_proc.pid}). Consolidating VRAM for {len(selected_stream_indexes)} streams.")
+
         for pos, i in enumerate(selected_stream_indexes):
             cmd = base_cmd + ["--stream-index", str(i)]
+            if args.shared_inference and shm:
+                cmd.extend(["--shm-slot", str(pos)])
             p = subprocess.Popen(cmd)
             processes.append((p, cmd, i))
             print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
@@ -1209,6 +1309,13 @@ if __name__ == "__main__":
                 except subprocess.TimeoutExpired:
                     print(f"[SYSTEM] Force killing PID {p.pid}")
                     p.kill()
+            if args.shared_inference and 'server_proc' in locals():
+                print("[SYSTEM] Shutting down GPU Master...")
+                server_proc.terminate()
+                server_proc.join(timeout=2)
+                if 'shm' in locals() and shm:
+                    shm.close()
+                    shm.unlink()
         sys.exit(0)
 
     args.stream_index = selected_stream_indexes[0]
@@ -1218,6 +1325,9 @@ if __name__ == "__main__":
         sys.exit(1)
 
     stream_config = config.STREAMS_CONFIG[args.stream_index]
+    # Inject assigned SHM slot into stream_config for main() to pick up
+    if args.shm_slot >= 0:
+        stream_config['shm_slot'] = args.shm_slot
 
     video_source = args.video_source
     if video_source is not None and video_source.isdigit():
@@ -1250,6 +1360,7 @@ if __name__ == "__main__":
                     show_all_detections=args.show_all_detections,
                     test_window=args.test_window,
                     debug=args.debug,
+                    shared_inference=args.shared_inference,
                 )
             except KeyboardInterrupt:
                 print("\n[SYSTEM] Interrupted by user. Exiting.")
@@ -1265,6 +1376,9 @@ if __name__ == "__main__":
             print("[SYSTEM] Restarting stream in 10 seconds...")
             should_sleep_before_restart = True
         finally:
+            if args.shared_inference and detector:
+                # Cleanup: remove our response queue from the shared manager
+                detector.cleanup()
             _restore_terminal_capture()
 
         if should_sleep_before_restart:

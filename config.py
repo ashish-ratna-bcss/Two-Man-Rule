@@ -95,9 +95,9 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 7.0,
+        "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
         "rois": {
@@ -147,7 +147,7 @@ STREAMS_CONFIG = [
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 7.0,
-        "evening_second_unlocker_timeout_seconds": 300.0,
+        "evening_second_unlocker_timeout_seconds": 50.0,
         "rois": {
             "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
             "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
@@ -167,14 +167,14 @@ STREAMS_CONFIG = [
         # High SSIM threshold never fires on low-texture patches.
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
         "ssim_threshold": 0.80,
-        "debounce_threshold": 25,
+        "debounce_threshold": 10,
         "intensity_threshold": 10,
         "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.5,
+        "door_corner_min_visible_ratio": 0.4,
         "min_unlock_seconds": 3.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
-        "evening_second_unlocker_timeout_seconds": 300.0,
+        "evening_second_unlocker_timeout_seconds": 50.0,
         "rois": {
             "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
             "DOOR_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
@@ -194,20 +194,20 @@ STREAMS_CONFIG = [
         "camera_id": "GF-5-CAM-25",
         "site_id": "5",
         "site_name": "jayanagar",
-        "closed_door_reference": "close_doors/closed_GF-5-CAM-40.jpg",
+        "closed_door_reference": "close_doors/closed_GF-5-CAM-25.jpg",
         "ssim_threshold": 0.80,
-        "debounce_threshold": 20,
+        "debounce_threshold": 15,
         "intensity_threshold": 8,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 4.0,
+        "morning_post_open_auth_seconds": 3.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "DOOR_CORNER_ROI": np.array([(803, 2), (908, 1), (798, 37)], np.int32),
-            "LOCKS_ROI": np.array([(597, 86), (1092, 80), (994, 545), (526, 574)], np.int32),
             "DOOR_ROI": np.array([(581, 3), (1187, 0), (1034, 742), (471, 797)], np.int32),
+            "LOCKS_ROI": np.array([(526, 81), (1144, 49), (1106, 557), (501, 588)], np.int32),
             "STANDING_ZONE": np.array([(545, 897), (544, 1103), (1165, 1050), (1154, 853)], np.int32),
             "INTERACTION_ZONE": np.array([(0, 8), (0, 1340), (1902, 1416), (2076, 11)], np.int32)
         }
@@ -224,7 +224,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 12,
         "motion_threshold": 5.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 0.5,
+        "min_unlock_seconds": 0.2,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -234,6 +234,30 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "DOOR_CORNER_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
+        }
+    },
+    # Stream 6
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.97.83:8001/Streaming/Channels/1801",
+        "camera_id": "GF-6-CAM-18",
+        "site_id": "6",
+        "site_name": "himayathnagar",
+        "closed_door_reference": "close_doors/closed_GF-6-CAM-18.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 3.5,
+        "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 3.0,
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "STANDING_ZONE": np.array([[862, 931], [1087, 687], [1217, 728], [1217, 728], [1027, 1013]], np.int32),
+            "LOCKS_ROI": np.array([(659, 284), (1065, 107), (1141, 642), (799, 861)], np.int32),
+            "DOOR_ROI": np.array([[571, 5], [761, 969], [1116, 620], [1040, 0]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[591, 16], [613, 38], [811, 41], [814, 4]], np.int32),
+            "INTERACTION_ZONE": np.array([[0, 8], [10, 1511], [2679, 1511], [2688, 24]], np.int32)
         }
     }
 ]
@@ -271,4 +295,11 @@ def calculate_min_unlock_frames(fps):
 def calculate_max_unlock_frames(fps):
     """Convert maximum unlock seconds to frame count based on actual video FPS."""
     return int(MAX_UNLOCK_SECONDS * fps)
-4
+
+# ============ SHARED INFERENCE & SCALING ============
+# When True, multiple streams share a single YOLO instance to save VRAM.
+SHARED_INFERENCE_ENABLED = True  # Enabled by default for high-density scalability
+BATCH_SIZE_LIMIT = 32             # Max frames to process in one GPU call
+INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
+GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
+MAX_SHARED_MEMORY_MB = 2048       # Buffer for passing frames between processes (2GB)

@@ -5,8 +5,8 @@ High-security monitoring system using YOLO-Pose and ByteTrack to enforce a robus
 ## Key Features
 
 - **Daily Orchestration (IST)**: Operates on a strict schedule based on Indian Standard Time:
-  - **Morning Open Check (09:30 AM – 10:30 AM)**: Monitors vault opening.
-  - **Evening Close Check (08:30 PM – 11:00 PM)**: Monitors vault closure.
+  - **Morning Open Check (07:00 AM – 11:00 AM)**: Monitors vault opening.
+  - **Evening Close Check (08:00 PM – 11:00 PM)**: Monitors vault closure.
 - **Biomechanical Dual-Auth**: Requires two different individuals to perform specific lock interactions simultaneously (6-10 second dwell time, arms raised, correct positioning).
 - **SSIM Door Verification**: Uses Grayscale Structural Similarity (SSIM) to detect door state (OPEN vs. CLOSED) with 10-frame temporal debouncing to prevent false triggers.
 - **Dynamic 5s Grace Period**: Upon a door transition, the system provides a 5-second window for unlockers to be properly positioned in the Interaction Zone. If auth is met within this window, a capture is taken immediately.
@@ -47,11 +47,11 @@ python3 main.py --stream-index 1
 python3 main.py --stream-indices 0,3,4
 ```
 **Behaviour:**
-- **Morning window 09:30–10:30 IST**: Tracks 2 unlockers, waits for door CLOSED→OPEN transition
+- **Morning window 07:00–11:00 IST**: Tracks 2 unlockers, waits for door CLOSED→OPEN transition
   - Screenshot captured at transition moment
   - `2 Persons: Available` — both verified unlockers in interaction zone when door opened
   - `2 Persons: Unavailable` — door opened without proper dual auth
-- **Evening window 20:30–23:00 IST**: Waits for door OPEN→CLOSED, then tracks for 2 unlockers (5-min timeout)
+- **Evening window 20:00–23:00 IST**: Waits for door OPEN→CLOSED, then tracks for 2 unlockers (5-min timeout)
   - Screenshot captured when auth confirmed or timeout reached
   - `2 Persons: Available` — both unlockers verified within timeout
   - `2 Persons: Unavailable` — timeout elapsed without dual auth

@@ -129,13 +129,20 @@ class DoorVerifier:
         self.last_visible_ratio = (visible_pixels / self._roi_area_pixels) if self._roi_area_pixels else 0.0
         return visible_mask
 
-    def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray) -> bool:
-        self.reference_mean = np.mean(reference_patch)
+    def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray, visible_mask: np.ndarray) -> bool:
+        if np.count_nonzero(visible_mask) == 0:
+            return self.stable_is_open
 
-        curr_mean = float(np.mean(curr_patch))
+        # Analyze brightness and motion ONLY on the non-occluded pixels
+        visible_curr = curr_patch[visible_mask == 1]
+        visible_ref = reference_patch[visible_mask == 1]
 
-        pixel_diff = cv2.absdiff(curr_patch, reference_patch)
+        self.reference_mean = float(np.mean(visible_ref))
+        curr_mean = float(np.mean(visible_curr))
+
+        pixel_diff = cv2.absdiff(visible_curr, visible_ref)
         mean_diff = float(np.mean(pixel_diff))
+        
         self.last_mean_diff = mean_diff
         self.last_curr_mean = curr_mean
         self.last_intensity_diff = abs(curr_mean - self.reference_mean)
@@ -144,22 +151,34 @@ class DoorVerifier:
             raw_is_open = False
             self.last_ssim = 1.0
         else:
-            intensity_diff = self.last_intensity_diff
+            # Normalize brightness based strictly on the visible portion of the door
+            mean_offset = self.reference_mean - curr_mean
+            adjusted_curr = np.clip(curr_patch.astype(np.int16) + mean_offset, 0, 255).astype(np.uint8)
 
-            self.last_ssim = float(ssim(reference_patch, curr_patch, full=False))
+            # Build composite patch for SSIM: 
+            # Paste the pristine reference pixels over occluded areas, 
+            # and use the brightness-adjusted current pixels for visible areas.
+            composite_patch = reference_patch.copy()
+            composite_patch[visible_mask == 1] = adjusted_curr[visible_mask == 1]
+
+            self.last_ssim = float(ssim(reference_patch, composite_patch, full=False, data_range=255))
             self.last_ssim = max(0.0, min(1.0, self.last_ssim))
 
-            ssim_changed = self.last_ssim < self.similarity_threshold
-            intensity_changed = intensity_diff > self.intensity_threshold
+            # Twilight Protection Layer:
+            # In dim ambient light (e.g., early morning before lights are on), 
+            # the camera loses physical contrast, artificially lowering the SSIM score.
+            # We dynamically relax the threshold here to prevent false "OPEN" triggers,
+            # while still allowing massive structural changes (actual openings) to be caught.
+            active_threshold = self.similarity_threshold
+            if self.darkening_protection and 20.0 <= curr_mean < 45.0:
+                active_threshold = self.similarity_threshold * 0.85
 
-            if curr_mean < 20.0:
+            ssim_changed = self.last_ssim < active_threshold
+
+            if curr_mean < 20.0 and self.darkening_protection:
                 raw_is_open = False
             else:
-                if intensity_changed:
-                    ssim_changed = self.last_ssim < self.similarity_threshold
-                    raw_is_open = ssim_changed
-                else:
-                    raw_is_open = False
+                raw_is_open = ssim_changed
 
         if raw_is_open == self.candidate_state:
             self.consecutive_frames_agreed += 1
@@ -192,10 +211,7 @@ class DoorVerifier:
             if self.last_visible_ratio < self.min_visible_ratio:
                 return self.stable_is_open
 
-            masked_curr = self.reference_patch.copy()
-            masked_curr[visible_mask == 1] = curr_patch[visible_mask == 1]
-
-            return self._run_verification(masked_curr, self.reference_patch)
+            return self._run_verification(curr_patch, self.reference_patch, visible_mask)
 
         except Exception as e:
             print(f"[DoorVerifier] Error: {e}")
