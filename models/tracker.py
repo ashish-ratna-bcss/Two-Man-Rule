@@ -69,8 +69,17 @@ class PersonTracker:
             return None
         return ((bbox[0] + bbox[2]) / 2.0, float(bbox[3]))
 
-    def update(self, detections: List[Dict]) -> Dict[int, Dict]:
-        """Update tracker with one-to-one assignment and spatial-gated ReID."""
+    def update(self, detections: List[Dict], protected_ids: set = None) -> Dict[int, Dict]:
+        """
+        Update tracker with one-to-one assignment and spatial-gated ReID.
+
+        Args:
+            detections: List of detection dicts with bbox, confidence, keypoints.
+            protected_ids: Set of true_ids that must NOT be stolen by Re-ID and
+                assigned to a different physical person (e.g. verified unlocker IDs).
+                These IDs are still tracked normally when directly detected — protection
+                only blocks a *lost* protected ID from being matched to a new passer-by.
+        """
         if not detections:
             return {}
 
@@ -124,6 +133,12 @@ class PersonTracker:
                 current_tracked_ids.add(true_id)
 
         # ── ReID: fires immediately (same frame) when ByteTrack drops an ID ──
+        _protected = protected_ids or set()
+        # reid_claimed: b_id_int slots already consumed by a Re-ID match this frame.
+        # Prevents within-frame chaining where stealing b_id X displaces its previous
+        # true_id, which then immediately steals b_id Y, etc. — creating 3-way loops
+        # (e.g. 10→3→5→10 each frame) that eventually starve a candidate's true_id.
+        reid_claimed = set()
         lost_ids = [tid for tid in self.reid_history if tid not in current_tracked_ids]
         for lost_id in lost_ids:
             self.lost_id_frames[lost_id] = self.lost_id_frames.get(lost_id, 0) + 1
@@ -131,6 +146,12 @@ class PersonTracker:
                 self.reid_history.pop(lost_id, None)
                 self.lost_id_frames.pop(lost_id, None)
                 self.last_known_bbox.pop(lost_id, None)
+                continue
+
+            # Skip Re-ID for protected IDs (verified + candidate unlockers): the
+            # state machine's _remap_verified_unlocker handles recovery at a higher,
+            # context-aware level and should not be pre-empted by the tracker.
+            if lost_id in _protected:
                 continue
 
             history = self.reid_history[lost_id]
@@ -156,6 +177,13 @@ class PersonTracker:
             for b_id_int, (true_id, det) in det_by_b_id.items():
                 if true_id == lost_id:
                     continue
+                # Skip slots already consumed by a Re-ID match this frame
+                if b_id_int in reid_claimed:
+                    continue
+                # Skip slots whose current holder is a protected ID — displacing them
+                # would cause the protected person's detection to vanish from reid_history.
+                if true_id in _protected:
+                    continue
 
                 # Spatial gate — skip candidate if far from where the person was last seen
                 if last_center is not None:
@@ -180,6 +208,7 @@ class PersonTracker:
                 det_by_b_id[best_b_id] = (lost_id, det_by_b_id[best_b_id][1])
                 self.lost_id_frames[lost_id] = 0
                 current_tracked_ids.add(lost_id)
+                reid_claimed.add(best_b_id)  # lock this slot for the rest of the frame
 
         # Finalize: store keypoints + last bbox for every confirmed track
         new_tracked = {}

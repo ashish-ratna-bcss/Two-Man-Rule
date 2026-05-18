@@ -635,7 +635,24 @@ def main(
                 t0 = time.perf_counter()
                 if tracking_active:
                     detections = detector.detect(frame)
-                    tracked_persons = tracker.update(detections)
+                    # Build the set of protected IDs so the tracker's pose-based Re-ID
+                    # cannot steal a verified OR candidate unlocker's true_id and assign
+                    # it to a passer-by standing nearby (which would permanently drop
+                    # the unlocker's tracking and falsely reset their timer).
+                    _verified_ids = set()
+                    for _s in ("a", "b"):
+                        # Protect verified IDs
+                        _vid = state_machine.session.get(f"id_{_s}")
+                        if _vid is not None:
+                            _verified_ids.add(_vid)
+                        # Protect candidate IDs (in-progress timer, not yet verified)
+                        _cid = state_machine.session.get(f"candidate_{_s}")
+                        if _cid is not None:
+                            _verified_ids.add(_cid)
+                        # Also protect all historical alias IDs for this slot
+                        _tag = f"P{1 if _s == 'a' else 2}_unlocker"
+                        _verified_ids.update(state_machine.all_unlocker_ids.get(_tag, set()))
+                    tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
                     
                     auth_active = (
                         current_auth_window == "morning"
