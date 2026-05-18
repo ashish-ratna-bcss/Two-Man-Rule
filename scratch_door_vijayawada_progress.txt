@@ -1,0 +1,32 @@
+[PROGRESS] Frame 660000/LIVE  | Unlockers: 0 | State: WAITING_FOR_FIRST_UNLOCKER | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660030/LIVE  | Unlockers: 0 | State: WAITING_FOR_FIRST_UNLOCKER | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660060/LIVE  | Unlockers: 0 | State: WAITING_FOR_FIRST_UNLOCKER | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660090/LIVE  | Unlockers: 0 | State: WAITING_FOR_FIRST_UNLOCKER | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660120/LIVE  | Unlockers: 0 | State: WAITING_FOR_FIRST_UNLOCKER | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660150/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.2s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660180/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.8s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660210/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660240/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660270/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660300/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.2s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660330/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660360/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660390/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 93 P2=- | Verified: P1=- P2=- | P1:0.1s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660420/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660450/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660480/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660510/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660540/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660570/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.2s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660600/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660630/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660660/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 84 P2=- | Verified: P1=- P2=- | P1:0.8s P2:0.0s | Door SSIM: 1.000
+[PROGRESS] Frame 660690/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.2s P2:0.0s | Door SSIM: 0.770
+[PROGRESS] Frame 660720/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.444
+[PROGRESS] Frame 660750/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.697
+[PROGRESS] Frame 660780/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 86 P2=- | Verified: P1=- P2=- | P1:0.6s P2:0.0s | Door SSIM: 0.695
+[PROGRESS] Frame 660810/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.695
+[PROGRESS] Frame 660840/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.695
+[PROGRESS] Frame 660870/LIVE  | Unlockers: 1 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=ID 84 P2=- | Verified: P1=- P2=- | P1:0.4s P2:0.0s | Door SSIM: 0.695
+[PROGRESS] Frame 660900/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.695
+[PROGRESS] Frame 660930/LIVE  | Unlockers: 0 | State: FIRST_UNLOCKER_ACTIVE | Candidates: P1=- P2=- | Verified: P1=- P2=- | P1:0.0s P2:0.0s | Door SSIM: 0.695

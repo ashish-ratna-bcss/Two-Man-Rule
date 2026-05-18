@@ -91,11 +91,11 @@ STREAMS_CONFIG = [
         # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
         # shift, so 0.92 never fires.  0.80 gives reliable open detection.
         "ssim_threshold": 0.80,
-        "debounce_threshold": 20,
+        "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 4.0,
+        "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -116,13 +116,13 @@ STREAMS_CONFIG = [
         "site_name": "somajiguda",
         "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
         "ssim_threshold": 0.80,
-        "debounce_threshold": 20,
+        "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 7.0,
+        "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
@@ -167,11 +167,11 @@ STREAMS_CONFIG = [
         # High SSIM threshold never fires on low-texture patches.
         #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
         "ssim_threshold": 0.80,
-        "debounce_threshold": 10,
+        "debounce_threshold": 5,
         "intensity_threshold": 10,
         "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.4,
-        "min_unlock_seconds": 3.0,
+        "door_corner_min_visible_ratio": 0.3,
+        "min_unlock_seconds": 2.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 50.0,
@@ -223,7 +223,7 @@ STREAMS_CONFIG = [
         "debounce_threshold": 7,
         "intensity_threshold": 12,
         "motion_threshold": 5.0,
-        "door_corner_min_visible_ratio": 0.5,
+        "door_corner_min_visible_ratio": 0.3,
         "min_unlock_seconds": 0.2,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
@@ -258,6 +258,30 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[571, 5], [761, 969], [1116, 620], [1040, 0]], np.int32),
             "DOOR_CORNER_ROI": np.array([[591, 16], [613, 38], [811, 41], [814, 4]], np.int32),
             "INTERACTION_ZONE": np.array([[0, 8], [10, 1511], [2679, 1511], [2688, 24]], np.int32)
+        }
+    },
+    # Stream 7
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.106.41:8001/Streaming/Channels/2901",
+        "camera_id": "GF-10-CAM-29",
+        "site_id": "10",
+        "site_name": "kompally",
+        "closed_door_reference": "close_doors/closed_GF-10-CAM-29.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 4.5,
+        "max_unlock_seconds": 10.0,
+        "morning_post_open_auth_seconds": 5.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([(2342, 106), (2197, 81), (2082, 24), (2070, 47), (2310, 165)], np.int32),
+            "LOCKS_ROI": np.array([(1717, 106), (1608, 393), (2131, 631), (2240, 294)], np.int32),
+            "STANDING_ZONE": np.array([[1587, 576], [2035, 815], [1947, 980], [1480, 716]], np.int32),
+            "DOOR_ROI": np.array([[1750, 5], [1563, 550], [2095, 801], [2460, 5]], np.int32),
+            "INTERACTION_ZONE": np.array([[0, 5], [3, 224], [1369, 1520], [2685, 1511], [2688, 5]], np.int32)
         }
     }
 ]
