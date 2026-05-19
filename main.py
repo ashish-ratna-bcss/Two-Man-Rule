@@ -1,6 +1,7 @@
 # main.py
 import sys
 import multiprocessing as mp
+mp.current_process().authkey = b'pmj_auth'
 from datetime import datetime, timezone, timedelta
 IST = timezone(timedelta(hours=5, minutes=30))
 import os
@@ -57,16 +58,14 @@ def setup_rois(roi_manager: ROIManager, stream_rois: dict, width: int, height: i
         lambda points: points.astype(np.int32).copy()
     )
     rois = {
-        "LOCKS_ROI": transform(stream_rois["LOCKS_ROI"]),
-        "DOOR_ROI": transform(stream_rois["DOOR_ROI"]),
-        "STANDING_ZONE": transform(stream_rois["STANDING_ZONE"]),
+        "LOCKS_ROI":        transform(stream_rois["LOCKS_ROI"]),
+        "DOOR_ROI":         transform(stream_rois["DOOR_ROI"]),
+        "STANDING_ZONE":    transform(stream_rois["STANDING_ZONE"]),
         "INTERACTION_ZONE": transform(stream_rois["INTERACTION_ZONE"]),
-        "DOOR_CORNER_ROI": transform(stream_rois["DOOR_CORNER_ROI"]),
+        "DOOR_CORNER_ROI":  transform(stream_rois["DOOR_CORNER_ROI"]),
     }
-
     for name, points in rois.items():
         roi_manager.register_polygon_roi(name, points)
-
     return rois
 
 
@@ -90,10 +89,10 @@ def print_roi_coordinates(rois: dict, width: int, height: int, scale_rois: bool)
 def draw_rois(visualizer: Visualizer, frame: np.ndarray, rois: dict):
     roi_styles = {
         "INTERACTION_ZONE": ((100, 100, 255), 1),
-        "STANDING_ZONE": ((0, 200, 255), 1),
-        "LOCKS_ROI": ((0, 255, 255), 2),
-        "DOOR_ROI": ((255, 0, 0), 1),
-        "DOOR_CORNER_ROI": ((255, 255, 255), 2),
+        "STANDING_ZONE":    ((0, 200, 255), 1),
+        "LOCKS_ROI":        ((0, 255, 255), 2),
+        "DOOR_ROI":         ((255, 0, 0), 1),
+        "DOOR_CORNER_ROI":  ((255, 255, 255), 2),
     }
     for name, points in rois.items():
         color, thickness = roi_styles[name]
@@ -102,17 +101,15 @@ def draw_rois(visualizer: Visualizer, frame: np.ndarray, rois: dict):
 
 
 def _bbox_height(bbox) -> float:
-    """Return bbox pixel height."""
     if bbox is None or len(bbox) < 4:
         return 0.0
     return float(bbox[3] - bbox[1])
 
 
 def _bbox_size_matches(ref_bbox, candidate_bbox, tolerance: float = 0.4) -> bool:
-    """True if candidate height is within `tolerance` fraction of reference height."""
     ref_h = _bbox_height(ref_bbox)
     if ref_h <= 0:
-        return True  # No reference — don't reject
+        return True
     cand_h = _bbox_height(candidate_bbox)
     if cand_h <= 0:
         return False
@@ -128,13 +125,6 @@ def _label_verified_slot(
     labels: dict,
     frame: np.ndarray = None,
 ):
-    """Apply verified-unlocker label with multi-factor ReID.
-
-    Priority order:
-    1. Primary ID still tracked — direct.
-    2. Any previously-tagged alt-ID still tracked — identity already confirmed.
-    3. Anchor + size fallback — when tracker ID switches.
-    """
     session = state_machine.session
     primary_id = session.get(f"id_{slot}")
     if primary_id is None:
@@ -147,19 +137,16 @@ def _label_verified_slot(
     def _is_other_unlocker(tid):
         return state_machine.unlocker_tags.get(tid) == other_tag
 
-    # 1. Primary ID directly tracked
     if primary_id in tracked_persons:
         labels[primary_id] = f"{slot_label} ID {primary_id}"
         return
 
-    # 2. Any tagged alt-ID still tracked
     for alt_id in state_machine.get_all_ids_for_tag(tag):
         if alt_id in tracked_persons and alt_id not in labels:
             labels[alt_id] = f"{slot_label} (alt ID {alt_id})"
             print(f"[VIZ] {slot_label} alt-ID {alt_id} (primary={primary_id})")
             return
 
-    # Build unlabelled, non-other-unlocker candidates
     candidates = {
         tid: p for tid, p in tracked_persons.items()
         if tid not in labels and not _is_other_unlocker(tid)
@@ -167,21 +154,17 @@ def _label_verified_slot(
     if not candidates:
         return
 
-    # 3. Live-origin + size fallback
     anchor = state_machine.verified_anchors.get(slot)
     ref_bbox = state_machine.last_seen_bbox.get(slot)
     height_ref_bbox = (getattr(state_machine, "slot_height_ref", {}).get(slot)) or ref_bbox
     if anchor is None:
         return
 
-    # Use last_seen_bbox center-bottom as live search origin — follows person movement
-    # verified_anchor stays frozen at lock-area; useless after P2 enters the room
     if ref_bbox is not None:
         search_origin = ((ref_bbox[0] + ref_bbox[2]) / 2, float(ref_bbox[3]))
     else:
         search_origin = anchor
 
-    # Grow threshold as person is lost longer — catches post-occlusion re-detection
     frames_lost = state_machine.slot_lost_frames.get(slot, 0)
     wide_threshold = min(config.UNLOCKER_ANCHOR_MATCH_PIXELS * 5 + frames_lost * 12, 700)
 
@@ -214,17 +197,14 @@ def get_unlocker_labels(
     tracked_persons: dict = None,
     frame: np.ndarray = None,
 ) -> dict:
-    """Return labels for active candidates and verified unlockers."""
     session = state_machine.session
     labels = {}
     tracked_persons = tracked_persons or {}
 
     if session.get("candidate_a") is not None:
-        track_id = int(session["candidate_a"])
-        labels[track_id] = f"P1 unlocking ID {track_id}"
+        labels[int(session["candidate_a"])] = f"P1 unlocking ID {int(session['candidate_a'])}"
     if session.get("candidate_b") is not None:
-        track_id = int(session["candidate_b"])
-        labels[track_id] = f"P2 unlocking ID {track_id}"
+        labels[int(session["candidate_b"])] = f"P2 unlocking ID {int(session['candidate_b'])}"
 
     _label_verified_slot("a", "P1 verified", state_machine, tracked_persons, labels, frame)
     _label_verified_slot("b", "P2 verified", state_machine, tracked_persons, labels, frame)
@@ -232,24 +212,27 @@ def get_unlocker_labels(
     return labels
 
 
-def draw_lost_verified_ghosts(visualizer: Visualizer, frame: np.ndarray, state_machine: DualAuthStateMachine, unlocker_labels: dict):
-    """Draw ghost anchors for verified persons who are currently lost/unassigned."""
+def draw_lost_verified_ghosts(
+    visualizer: Visualizer,
+    frame: np.ndarray,
+    state_machine: DualAuthStateMachine,
+    unlocker_labels: dict,
+):
     for slot in ("a", "b"):
         if state_machine.session.get(f"id_{slot}") is None:
             anchor = state_machine.verified_anchors.get(slot)
             if anchor is not None:
-                # This person was verified but is currently lost
                 label = f"RECOVERING P{1 if slot == 'a' else 2}..."
                 visualizer.draw_ghost_anchor(frame, anchor, label)
 
 
 def draw_pose_debug(frame: np.ndarray, tracked_persons: dict, visible_ids: set):
     keypoint_styles = {
-        0: ("HEAD", (255, 255, 0)),
-        config.KEYPOINT_WRIST_LEFT: ("LW", (0, 255, 0)),
-        config.KEYPOINT_WRIST_RIGHT: ("RW", (0, 255, 0)),
-        config.KEYPOINT_ELBOW_LEFT: ("LE", (0, 165, 255)),
-        config.KEYPOINT_ELBOW_RIGHT: ("RE", (0, 165, 255)),
+        0:                           ("HEAD", (255, 255, 0)),
+        config.KEYPOINT_WRIST_LEFT:  ("LW",   (0, 255, 0)),
+        config.KEYPOINT_WRIST_RIGHT: ("RW",   (0, 255, 0)),
+        config.KEYPOINT_ELBOW_LEFT:  ("LE",   (0, 165, 255)),
+        config.KEYPOINT_ELBOW_RIGHT: ("RE",   (0, 165, 255)),
     }
     for track_id, person in tracked_persons.items():
         if track_id not in visible_ids:
@@ -264,15 +247,19 @@ def draw_pose_debug(frame: np.ndarray, tracked_persons: dict, visible_ids: set):
             if conf < 0.25:
                 continue
             cv2.circle(frame, (int(x), int(y)), 4, color, -1)
-            cv2.putText(frame, label, (int(x) + 5, int(y) - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA)
+            cv2.putText(
+                frame, label, (int(x) + 5, int(y) - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, cv2.LINE_AA,
+            )
 
 
 def can_show_live_window(show_live: bool) -> bool:
     if not show_live:
         return False
-    if os.name == "posix" and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
-        print("[WARNING] No display server detected; live window disabled. ROI preview image will still be saved.")
+    if os.name == "posix" and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        print("[WARNING] No display server detected; live window disabled.")
         return False
     return True
 
@@ -297,7 +284,7 @@ def capture(
     frame_idx: int = None,
 ):
     """Unified capture + log helper. Saves annotated frame + paired JSON metadata."""
-    now_ist = datetime.now(IST)
+    now_ist  = datetime.now(IST)
     date_str = now_ist.strftime("%d-%m-%Y")
     time_str = now_ist.strftime("%H-%M-%S")
 
@@ -305,7 +292,7 @@ def capture(
     os.makedirs(target_dir, exist_ok=True)
 
     _alert_counter[0] += 1
-    filename = f"alert_{site_id}_{cam_id}_{date_str}_{time_str}.png"
+    filename  = f"alert_{site_id}_{cam_id}_{date_str}_{time_str}.png"
     full_path = os.path.join(target_dir, filename)
 
     client_frame = clean_frame.copy()
@@ -321,19 +308,18 @@ def capture(
 
     ok = cv2.imwrite(full_path, client_frame)
 
-    # Save paired JSON metadata
-    json_path = full_path.rsplit('.', 1)[0] + '.json'
+    json_path  = full_path.rsplit('.', 1)[0] + '.json'
     event_data = {
-        "site_id": site_id,
-        "cam_id": cam_id,
-        "window": check_type.lower(),
+        "site_id":  site_id,
+        "cam_id":   cam_id,
+        "window":   check_type.lower(),
         "events": [
             {
-                "timestamp": now_ist.isoformat(),
+                "timestamp":  now_ist.isoformat(),
                 "event_type": event_type,
-                "details": details or {},
+                "details":    details or {},
             }
-        ]
+        ],
     }
     try:
         with open(json_path, "w") as f:
@@ -351,19 +337,22 @@ def capture(
             level="INFO" if ok and json_ok else "ERROR",
             details={
                 "source_event_type": event_type,
-                "check_type": check_type,
-                "site_name": site_name,
-                "site_id": site_id,
-                "cam_id": cam_id,
-                "image_path": full_path,
-                "json_path": json_path,
-                "image_ok": bool(ok),
-                "json_ok": bool(json_ok),
-                "event_details": details or {},
+                "check_type":        check_type,
+                "site_name":         site_name,
+                "site_id":           site_id,
+                "cam_id":            cam_id,
+                "image_path":        full_path,
+                "json_path":         json_path,
+                "image_ok":          bool(ok),
+                "json_ok":           bool(json_ok),
+                "event_details":     details or {},
             },
             frame_idx=frame_idx,
         )
-    print(f"[CAPTURE] {event_type}: {full_path} (image={'OK' if ok else 'FAILED'}, json={'OK' if json_ok else 'FAILED'})")
+    print(
+        f"[CAPTURE] {event_type}: {full_path} "
+        f"(image={'OK' if ok else 'FAILED'}, json={'OK' if json_ok else 'FAILED'})"
+    )
     return full_path
 
 
@@ -382,8 +371,8 @@ def main(
 ):
     global detector
     video_source = video_source or stream_config["rtsp_url"]
-    cam_id = stream_config["camera_id"]
-    site_name = stream_config["site_name"]
+    cam_id       = stream_config["camera_id"]
+    site_name    = stream_config["site_name"]
     evidence_dir = os.path.join(config.BASE_OUTPUT_DIR, site_name, cam_id)
     runtime_logger = RuntimeEventLogger(
         base_dir=config.BASE_LOG_DIR,
@@ -401,55 +390,63 @@ def main(
         details={
             "video_source": str(video_source),
             "evidence_dir": evidence_dir,
-            "log_file": runtime_logger.current_file_path,
+            "log_file":     runtime_logger.current_file_path,
         },
     )
 
-
     detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
     if shared_inference:
-        req_q, res_q, shm_config = get_shared_queues()
-        if req_q and res_q is not None:
-            # Use assigned SHM slot if provided via CLI
+        req_q, res_registry, shm_config = get_shared_queues()
+        if req_q is not None and res_registry is not None:
+            # Inject assigned SHM slot into registry slot_map if provided via CLI
             if shm_config and 'shm_slot' in stream_config:
                 slot_map = dict(shm_config.get('slot_map', {}))
                 slot_map[detector.client_id] = stream_config['shm_slot']
                 shm_config['slot_map'] = slot_map
 
-            detector.set_queues(req_q, res_q, shm_config=shm_config)
+            # set_queues creates the private response queue and registers it
+            detector.set_queues(req_q, res_registry, shm_config=shm_config)
         else:
             print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
             detector.shared_mode = False
-    tracker = PersonTracker()
 
-    roi_manager = ROIManager()
+    tracker      = PersonTracker()
+    roi_manager  = ROIManager()
+
+    # LKG (last-known-good) detection cache — guards against inference timeouts.
+    # When detector.detect() returns None (timeout sentinel), we reuse this
+    # cache rather than treating the frame as "no persons present".
+    lkg_detections: list = []
+    lkg_consecutive_timeouts: int = 0
+    LKG_MAX_AGE = getattr(config, "LKG_MAX_CONSECUTIVE_TIMEOUTS", 15)
 
     with VideoHandler(video_source) as video:
-        fps = video.get_fps()
+        fps         = video.get_fps()
         width, height = video.get_dimensions()
         total_frames = video.get_total_frames()
         process_every = max(int(process_every), 1)
         print(f"[VIDEO] FPS: {fps:.1f}, Resolution: {width}x{height}, Total Frames: {total_frames}")
         print("[VIDEO] Processing original frames without resizing.")
-        print(f"[VIDEO] Pose inference every {process_every} frame(s). Use --process-every 1 for full analysis.")
+        print(f"[VIDEO] Pose inference every {process_every} frame(s).")
 
         active_rois = setup_rois(roi_manager, stream_config["rois"], width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
-        try:
-            # Read per-stream tuning (fall back to safe production defaults)
-            stream_ssim_thresh = float(stream_config.get("ssim_threshold", config.SSIM_THRESHOLD))
-            stream_intensity_thresh = stream_config.get("intensity_threshold", None)
-            stream_motion_thresh = stream_config.get("motion_threshold", None)
-            stream_debounce = int(stream_config.get("debounce_threshold", config.DOOR_DEBOUNCE_FRAMES))
-            stream_min_visible_ratio = float(stream_config.get("door_corner_min_visible_ratio", config.DOOR_CORNER_MIN_VISIBLE_RATIO))
 
-            # Basic validation / clamping to avoid accidental misconfiguration
-            stream_ssim_thresh = min(max(stream_ssim_thresh, 0.05), 0.99)
+        try:
+            stream_ssim_thresh      = float(stream_config.get("ssim_threshold", config.SSIM_THRESHOLD))
+            stream_intensity_thresh = stream_config.get("intensity_threshold", None)
+            stream_motion_thresh    = stream_config.get("motion_threshold", None)
+            stream_debounce         = int(stream_config.get("debounce_threshold", config.DOOR_DEBOUNCE_FRAMES))
+            stream_min_visible_ratio = float(
+                stream_config.get("door_corner_min_visible_ratio", config.DOOR_CORNER_MIN_VISIBLE_RATIO)
+            )
+
+            stream_ssim_thresh       = min(max(stream_ssim_thresh, 0.05), 0.99)
             if stream_intensity_thresh is not None:
                 stream_intensity_thresh = float(max(stream_intensity_thresh, 0.0))
             if stream_motion_thresh is not None:
                 stream_motion_thresh = float(max(stream_motion_thresh, 0.0))
-            stream_debounce = int(min(max(stream_debounce, 1), 600))
+            stream_debounce          = int(min(max(stream_debounce, 1), 600))
             stream_min_visible_ratio = min(max(stream_min_visible_ratio, 0.0), 1.0)
 
             stream_darkening = stream_config.get("darkening_protection", config.DOOR_DARKENING_PROTECTION)
@@ -474,16 +471,21 @@ def main(
 
         mirror_lr = stream_config.get("mirror_left_right", False)
 
-        # Per-stream unlock timing — stream value takes full priority over global default
         _has_min = "min_unlock_seconds" in stream_config
         _has_max = "max_unlock_seconds" in stream_config
         stream_min_unlock = float(stream_config["min_unlock_seconds"]) if _has_min else float(config.MIN_UNLOCK_SECONDS)
         stream_max_unlock = float(stream_config["max_unlock_seconds"]) if _has_max else float(config.MAX_UNLOCK_SECONDS)
-        stream_morning_post_open_auth = float(stream_config.get("morning_post_open_auth_seconds", config.MORNING_POST_OPEN_AUTH_SECONDS))
-        stream_evening_second_unlocker_timeout = float(stream_config.get("evening_second_unlocker_timeout_seconds", config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS))
-        print(f"[SYSTEM] Lock interaction window: "
-              f"min={stream_min_unlock}s ({'stream' if _has_min else 'global default'}), "
-              f"max={stream_max_unlock}s ({'stream' if _has_max else 'global default'})")
+        stream_morning_post_open_auth = float(
+            stream_config.get("morning_post_open_auth_seconds", config.MORNING_POST_OPEN_AUTH_SECONDS)
+        )
+        stream_evening_second_unlocker_timeout = float(
+            stream_config.get("evening_second_unlocker_timeout_seconds", config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS)
+        )
+        print(
+            f"[SYSTEM] Lock interaction window: "
+            f"min={stream_min_unlock}s ({'stream' if _has_min else 'global default'}), "
+            f"max={stream_max_unlock}s ({'stream' if _has_max else 'global default'})"
+        )
 
         state_machine = DualAuthStateMachine(
             roi_manager, int(fps),
@@ -491,109 +493,93 @@ def main(
             min_unlock_seconds=stream_min_unlock,
             max_unlock_seconds=stream_max_unlock,
         )
-        visualizer = Visualizer()
+        visualizer   = Visualizer()
         alert_system = AlertSystem(evidence_dir=evidence_dir, runtime_logger=runtime_logger)
 
-        # Determine initial state based on current IST time
-        startup_ist = datetime.now(IST)
+        startup_ist    = datetime.now(IST)
         last_reset_date = startup_ist.strftime("%Y-%m-%d")
-        curr_hm = startup_ist.strftime("%H:%M")
-        
-        # Test mode override
+        curr_hm        = startup_ist.strftime("%H:%M")
+
         if test_window:
             print(f"[SYSTEM] TEST MODE: Forcing {test_window.upper()} window logic.")
             morning_check_done = (test_window == "evening")
             evening_check_done = (test_window == "morning")
         else:
-            # If started after 11:00 AM, morning check is neglected for today
             morning_check_done = curr_hm > "11:00"
-            # If started after 11:58 PM, evening check is neglected for today
             evening_check_done = curr_hm > "23:58"
-            
             if morning_check_done:
                 print(f"[SYSTEM] Startup after 11:00 AM IST. Morning check for {last_reset_date} marked as SKIPPED.")
             if evening_check_done:
                 print(f"[SYSTEM] Startup after 11:58 PM IST. Evening check for {last_reset_date} marked as SKIPPED.")
-        
-        frame_idx = 0
-        debug_frame_saved = False
-        roi_preview_saved = False
-        last_processed_frame_idx = 0
-        tracked_persons = {}
-        occupancy_status = "OK"
-        auth_result = {
-            "authorized": False,
+
+        frame_idx                    = 0
+        last_processed_frame_idx     = 0
+        tracked_persons              = {}
+        occupancy_status             = "OK"
+        auth_result                  = {
+            "authorized":       False,
             "lock_a_authorized": False,
             "lock_b_authorized": False,
-            "violation_type": "INCOMPLETE",
+            "violation_type":   "INCOMPLETE",
         }
-        active_auth_window = None
-        auth_success_logged_by_window = {
-            "morning": False,
-            "evening": False,
-        }
-        evening_auth_started = False
-        last_door_state = None  # To detect transitions
-        is_door_open = False
-        ssim_val = None
-        intensity_val = None
-        intensity_diff = None
-        door_transition_pending = False
-        tracking_active = False
-        persons_auth_status = None  # None=blank, True=Available, False=Unavailable
-        morning_post_open_started = False   # True after CLOSED→OPEN confirmed
-        morning_post_open_start_frame = None  # frame_idx when post-open window began
-        live_window_available = can_show_live_window(show_live)
+        active_auth_window           = None
+        auth_success_logged_by_window = {"morning": False, "evening": False}
+        evening_auth_started         = False
+        last_door_state              = None
+        is_door_open                 = False
+        ssim_val                     = None
+        intensity_val                = None
+        intensity_diff               = None
+        door_transition_pending      = False
+        tracking_active              = False
+        persons_auth_status          = None
+        morning_post_open_started    = False
+        morning_post_open_start_frame = None
+        live_window_available        = can_show_live_window(show_live)
+
         if live_window_available:
             cv2.namedWindow(f"Two-Man Rule Live ROI Debug - {cam_id}", cv2.WINDOW_NORMAL)
 
         print("[SYSTEM] Starting frame processing loop...")
-        t_loop_start = time.perf_counter()
+        t_loop_start          = time.perf_counter()
         processed_frames_count = 0
 
         while True:
-            # Wait for latest frame from background thread
             ret, frame = video.read_frame(block=True, timeout=0.1)
-            
             if not ret:
-                # Stream is dead
                 if stream_config.get("camera_id"):
                     print(f"[SYSTEM] Stream {stream_config['camera_id']} died. Exiting for restart.")
                 break
-            
             if frame is None:
-                # Timeout reached or no frame yet; skip this beat
                 continue
 
             clean_frame = frame.copy()
-            frame_idx += 1
+            frame_idx  += 1
 
             # ===== IST TIME & DAILY RESET =====
-            now_ist = datetime.now(IST)
-            today_str = now_ist.strftime("%Y-%m-%d")
+            now_ist    = datetime.now(IST)
+            today_str  = now_ist.strftime("%Y-%m-%d")
             if last_reset_date != today_str:
                 print(f"[SYSTEM] Midnight reset for {today_str} IST.")
-                morning_check_done = False
-                evening_check_done = False
-                auth_success_logged_by_window = {
-                    "morning": False,
-                    "evening": False,
-                }
-                active_auth_window = None
-                evening_auth_started = False
+                morning_check_done            = False
+                evening_check_done            = False
+                auth_success_logged_by_window = {"morning": False, "evening": False}
+                active_auth_window            = None
+                evening_auth_started          = False
+                lkg_detections                = []
+                lkg_consecutive_timeouts      = 0
                 state_machine.reset_session()
                 last_reset_date = today_str
 
             curr_hour_min = now_ist.strftime("%H:%M")
-            
-            # Test mode override for auth window
+
             if test_window:
                 is_morning_window = (test_window == "morning")
                 is_evening_window = (test_window == "evening")
             else:
                 is_morning_window = "07:00" <= curr_hour_min <= "11:00"
                 is_evening_window = "20:00" <= curr_hour_min <= "23:00"
-            
+
             current_auth_window = None
             if is_morning_window and not morning_check_done:
                 current_auth_window = "morning"
@@ -608,14 +594,16 @@ def main(
                     print(f"[SYSTEM] Starting {current_auth_window} auth window with a fresh auth session.")
 
                 state_machine.reset_session()
-                evening_auth_started = False
-                tracked_persons = {}
-                occupancy_status = "OK"
+                evening_auth_started   = False
+                tracked_persons        = {}
+                occupancy_status       = "OK"
+                lkg_detections         = []
+                lkg_consecutive_timeouts = 0
                 auth_result = {
-                    "authorized": False,
+                    "authorized":        False,
                     "lock_a_authorized": False,
                     "lock_b_authorized": False,
-                    "violation_type": "INCOMPLETE",
+                    "violation_type":    "INCOMPLETE",
                 }
                 active_auth_window = current_auth_window
 
@@ -627,39 +615,93 @@ def main(
             )
 
             # ===== PIPELINE =====
-            should_process_frame = frame_idx == 1 or (frame_idx - last_processed_frame_idx) >= process_every
+            should_process_frame = (
+                frame_idx == 1
+                or (frame_idx - last_processed_frame_idx) >= process_every
+            )
+
             if should_process_frame:
                 frame_step = max(frame_idx - last_processed_frame_idx, 1)
                 last_processed_frame_idx = frame_idx
 
                 t0 = time.perf_counter()
+
                 if tracking_active:
-                    detections = detector.detect(frame)
-                    # Build the set of protected IDs so the tracker's pose-based Re-ID
-                    # cannot steal a verified OR candidate unlocker's true_id and assign
-                    # it to a passer-by standing nearby (which would permanently drop
-                    # the unlocker's tracking and falsely reset their timer).
+                    raw_detections = detector.detect(frame)
+
+                    # ----------------------------------------------------------
+                    # Inference result handling — three distinct outcomes:
+                    #
+                    #   raw_detections is None  → INFERENCE_TIMEOUT
+                    #       The GPU server did not respond within the deadline.
+                    #       Transport failure — do NOT advance the FSM toward
+                    #       UNAUTHORIZED.  Reuse LKG detections so the tracker
+                    #       can coast and timers are not wiped.
+                    #
+                    #   raw_detections == []    → GENUINE EMPTY RESULT
+                    #       GPU ran successfully and found no persons.
+                    #       Advance FSM normally (persons left the scene).
+                    #
+                    #   raw_detections is list  → SUCCESSFUL DETECTION
+                    #       Normal path. Update LKG cache and reset timeout counter.
+                    # ----------------------------------------------------------
+                    if raw_detections is None:
+                        # INFERENCE_TIMEOUT — hold state with LKG
+                        lkg_consecutive_timeouts += 1
+                        if lkg_consecutive_timeouts == 1:
+                            print(
+                                f"[{cam_id}] Inference timeout on frame {frame_idx}. "
+                                f"Using LKG ({len(lkg_detections)} detections). "
+                                f"FSM state preserved."
+                            )
+                        elif lkg_consecutive_timeouts % 10 == 0:
+                            print(
+                                f"[{cam_id}] {lkg_consecutive_timeouts} consecutive inference timeouts. "
+                                f"LKG age: {lkg_consecutive_timeouts} frames."
+                            )
+
+                        if lkg_consecutive_timeouts <= LKG_MAX_AGE:
+                            # Use stale-but-valid detections to coast the tracker
+                            detections = lkg_detections
+                        else:
+                            # Too many consecutive timeouts — GPU server likely down.
+                            # Use empty list so tracker ages out tracks gracefully,
+                            # but log as DEGRADED rather than UNAUTHORIZED.
+                            detections = []
+                            print(
+                                f"[{cam_id}] DEGRADED: {lkg_consecutive_timeouts} timeouts. "
+                                f"Tracker coasting on empty detections. "
+                                f"Check GPU server."
+                            )
+                    else:
+                        # Successful inference (empty or non-empty)
+                        if lkg_consecutive_timeouts > 0:
+                            print(
+                                f"[{cam_id}] Inference restored after "
+                                f"{lkg_consecutive_timeouts} timeouts."
+                            )
+                        lkg_consecutive_timeouts = 0
+                        lkg_detections           = raw_detections   # update cache
+                        detections               = raw_detections
+
+                    # Protect verified/candidate IDs from tracker Re-ID theft
                     _verified_ids = set()
                     for _s in ("a", "b"):
-                        # Protect verified IDs
-                        _vid = state_machine.session.get(f"id_{_s}")
-                        if _vid is not None:
-                            _verified_ids.add(_vid)
-                        # Protect candidate IDs (in-progress timer, not yet verified)
-                        _cid = state_machine.session.get(f"candidate_{_s}")
-                        if _cid is not None:
-                            _verified_ids.add(_cid)
-                        # Also protect all historical alias IDs for this slot
+                        for _key in (f"id_{_s}", f"candidate_{_s}"):
+                            _v = state_machine.session.get(_key)
+                            if _v is not None:
+                                _verified_ids.add(_v)
                         _tag = f"P{1 if _s == 'a' else 2}_unlocker"
                         _verified_ids.update(state_machine.all_unlocker_ids.get(_tag, set()))
+
                     tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
-                    
+
                     auth_active = (
                         current_auth_window == "morning"
                         or (current_auth_window == "evening" and evening_auth_started)
                         or (current_auth_window is None and (debug or show_all_detections))
                     )
-                    
+
                     if auth_active:
                         occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
                         state_machine.update_timers(tracked_persons, frame_step=frame_step)
@@ -669,67 +711,62 @@ def main(
                         state_machine.session["improper_positioning"] = None
                         occupancy_status = "OK"
                         auth_result = {
-                            "authorized": False,
+                            "authorized":        False,
                             "lock_a_authorized": False,
                             "lock_b_authorized": False,
-                            "violation_type": "INCOMPLETE",
+                            "violation_type":    "INCOMPLETE",
                         }
 
                 is_door_open = False
-                ssim_val = None
+                ssim_val     = None
                 if door_verifier:
-                    # In morning window, we must ALWAYS check door state to catch the CLOSED->OPEN transition
-                    # regardless of whether people are blocking the ROI (grace period handles the check).
                     if current_auth_window == "morning" and not morning_check_done:
                         check_door = (
-                            state_machine.session.get("id_a") is not None or 
-                            state_machine.session.get("id_b") is not None or
-                            state_machine.session.get("candidate_a") is not None or
-                            state_machine.session.get("candidate_b") is not None
+                            state_machine.session.get("id_a") is not None
+                            or state_machine.session.get("id_b") is not None
+                            or state_machine.session.get("candidate_a") is not None
+                            or state_machine.session.get("candidate_b") is not None
                         )
                     elif current_auth_window == "evening" and not evening_check_done:
                         check_door = True
                     else:
                         check_door = state_machine.should_check_door_state()
-                        
+
                     check_door = check_door or debug
                     if check_door:
                         is_door_open = door_verifier.verify(frame, tracked_persons=tracked_persons)
                     else:
                         is_door_open = last_door_state if last_door_state is not None else False
-                        
-                    ssim_val = door_verifier.get_last_ssim()
-                    intensity_val = door_verifier.get_last_intensity()
-                    intensity_diff = door_verifier.get_last_intensity_diff()
+
+                    ssim_val        = door_verifier.get_last_ssim()
+                    intensity_val   = door_verifier.get_last_intensity()
+                    intensity_diff  = door_verifier.get_last_intensity_diff()
                     door_transition_pending = door_verifier.is_transition_pending()
                 else:
                     door_transition_pending = False
+
                 inference_ms = (time.perf_counter() - t0) * 1000.0
                 processed_frames_count += 1
-                
-                # Periodic Telemetry Logging (Production Metrics)
+
                 if frame_idx % 150 == 0:
-                    elapsed = time.perf_counter() - t_loop_start
+                    elapsed    = time.perf_counter() - t_loop_start
                     actual_fps = processed_frames_count / elapsed if elapsed > 0 else 0
-                    telemetry = video.get_telemetry()
-                    print(f"[METRICS] {cam_id} | FPS: {actual_fps:.1f} | AI: {inference_ms:.1f}ms | "
-                          f"Queue Delay: {telemetry['queue_delay_ms']:.1f}ms | Drops: {telemetry['dropped_frames']}")
-                    # Reset counters periodically
-                    t_loop_start = time.perf_counter()
+                    telemetry  = video.get_telemetry()
+                    timeout_tag = f" | LKG timeouts: {lkg_consecutive_timeouts}" if lkg_consecutive_timeouts else ""
+                    print(
+                        f"[METRICS] {cam_id} | FPS: {actual_fps:.1f} | AI: {inference_ms:.1f}ms | "
+                        f"Queue Delay: {telemetry['queue_delay_ms']:.1f}ms | "
+                        f"Drops: {telemetry['dropped_frames']}{timeout_tag}"
+                    )
+                    t_loop_start           = time.perf_counter()
                     processed_frames_count = 0
 
             # ===== VISUALIZATION =====
             draw_rois(visualizer, frame, active_rois)
 
             unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
-            if debug or show_all_detections:
-                visible_pose_ids = set(tracked_persons.keys())
-            else:
-                visible_pose_ids = set(unlocker_labels)
+            _show_all       = show_all_detections or debug
 
-            # Draw only locker-door interaction IDs by default. Raw detections can be
-            # enabled for calibration with --show-all-detections or --debug.
-            _show_all = show_all_detections or debug
             for track_id, person in tracked_persons.items():
                 if track_id in unlocker_labels:
                     label = unlocker_labels[track_id]
@@ -745,72 +782,89 @@ def main(
                 else:
                     color = config.COLOR_DETECTED
                 visualizer.draw_bounding_box(frame, person["bbox"], color, label)
+
+            visible_pose_ids = set(tracked_persons.keys()) if (debug or show_all_detections) else set(unlocker_labels)
             draw_pose_debug(frame, tracked_persons, visible_pose_ids)
-            
-            # Draw ghost anchors for lost verified persons (ReID search markers)
             draw_lost_verified_ghosts(visualizer, frame, state_machine, unlocker_labels)
 
-            # Draw progress bars at lock centers
             locks_center = roi_manager.get_roi_center("LOCKS_ROI")
             if locks_center:
                 id_a_done = state_machine.session.get("id_a") is not None
                 id_b_done = state_machine.session.get("id_b") is not None
-                
-                # Use stream-specific min unlock time for accurate percentage
                 pct_a = min((state_machine.session.get("timer_a_seconds", 0) / stream_min_unlock) * 100, 100)
                 pct_b = min((state_machine.session.get("timer_b_seconds", 0) / stream_min_unlock) * 100, 100)
-                
+
                 if not id_a_done:
-                    # Show P1 progress if not yet verified
                     if pct_a > 0:
                         visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_a)
                 elif not id_b_done:
-                    # Show P2 progress after P1 is verified
                     if pct_b > 0:
                         visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_b)
                 else:
-                    # Both verified, show full circle (green)
                     visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), 100)
 
-            # Stable Unlockers Count based on assigned sessions
             n = 0
             if tracking_active:
                 if state_machine.session.get("candidate_a") is not None or state_machine.session.get("id_a") is not None:
                     n += 1
                 if state_machine.session.get("candidate_b") is not None or state_machine.session.get("id_b") is not None:
                     n += 1
-            auth_status_text = auth_result["authorized"] if tracking_active else "OFF"
+
+            # Surface LKG timeout status in the HUD
+            timeout_hud = (
+                f" | LKG:{lkg_consecutive_timeouts}f"
+                if lkg_consecutive_timeouts > 0
+                else ""
+            )
+            auth_status_text  = auth_result["authorized"] if tracking_active else "OFF"
             state_status_text = state_machine.session["sequence_state"] if tracking_active else "IDLE_OUTSIDE_AUDIT"
             visualizer.draw_status_text(
                 frame,
-                f"Unlockers: {n} | State: {state_status_text} | Auth: {auth_status_text}",
-                (10, 30)
+                f"Unlockers: {n} | State: {state_status_text} | Auth: {auth_status_text}{timeout_hud}",
+                (10, 30),
             )
+
             if should_process_frame:
-                ai_status = f"AI: {inference_ms:.0f}ms | Every {process_every} frame(s) | IDs only for unlockers"
-                if not tracking_active:
-                    ai_status = "AI tracking: waiting for OPEN->CLOSE" if current_auth_window == "evening" else "AI tracking: OFF outside audit window"
-                visualizer.draw_status_text(
-                    frame,
-                    ai_status,
-                    (10, 55)
-                )
+                if lkg_consecutive_timeouts > 0:
+                    ai_status = (
+                        f"AI: TIMEOUT (LKG age {lkg_consecutive_timeouts}f) | "
+                        f"Every {process_every} frame(s)"
+                    )
+                    visualizer.draw_status_text(frame, ai_status, (10, 55), color=(0, 165, 255))
+                else:
+                    if not tracking_active:
+                        ai_status = (
+                            "AI tracking: waiting for OPEN->CLOSE"
+                            if current_auth_window == "evening"
+                            else "AI tracking: OFF outside audit window"
+                        )
+                    else:
+                        ai_status = (
+                            f"AI: {inference_ms:.0f}ms | Every {process_every} frame(s) | "
+                            f"IDs only for unlockers"
+                        )
+                    visualizer.draw_status_text(frame, ai_status, (10, 55))
+
             door_status_label = "--" if door_transition_pending else ("OPEN" if is_door_open else "CLOSED")
             if ssim_val is not None:
                 if debug and intensity_val is not None:
-                    visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Intensity: {intensity_val:.1f} | Door: {door_status_label}", (10, 80))
+                    visualizer.draw_status_text(
+                        frame,
+                        f"SSIM: {ssim_val:.3f} | Intensity: {intensity_val:.1f} | Door: {door_status_label}",
+                        (10, 80),
+                    )
                 else:
                     visualizer.draw_status_text(frame, f"SSIM: {ssim_val:.3f} | Door: {door_status_label}", (10, 80))
 
-            # Prominent Top-Right Corner Door Status
             door_status_text = f"DOOR: {door_status_label}"
-            door_color = (200, 200, 200) if door_transition_pending else ((0, 0, 255) if is_door_open else (0, 255, 0))
-            # Use larger font for the corner status
-            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, cv2.LINE_AA) # shadow
-            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60), 
+            door_color = (
+                (200, 200, 200) if door_transition_pending
+                else ((0, 0, 255) if is_door_open else (0, 255, 0))
+            )
+            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 4, cv2.LINE_AA)
+            cv2.putText(frame, door_status_text, (frame.shape[1] - 300, 60),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.2, door_color, 2, cv2.LINE_AA)
-
 
             # ===== EVENTS + CAPTURE =====
             site_id = stream_config.get("site_id", "")
@@ -835,74 +889,67 @@ def main(
                 )
 
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
-                visualizer.draw_status_text(frame, "SECURITY BREACH: Unauthorized Presence",
-                                            (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                # Intermediary screenshot disabled to ensure 1 screenshot per window
-                # _capture("VIOLATION_OVERCROWD", {"occupancy": len(state_machine.active_ids_in_zone)}, "Security")
+                visualizer.draw_status_text(
+                    frame, "SECURITY BREACH: Unauthorized Presence",
+                    (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100),
+                )
 
             if tracking_active and should_process_frame and auth_result.get("violation_type") == "SAME_ID":
-                visualizer.draw_status_text(frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
-                                            (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100))
-                
-                # Prevent duplicate captures of the same violation
+                visualizer.draw_status_text(
+                    frame, "SECURITY BREACH: SAME PERSON ATTEMPTING DUAL UNLOCK",
+                    (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100),
+                )
                 if "SAME_ID" not in state_machine.session["captured_violations"]:
-                    persons_auth_status = False  # Set before capture so screenshot shows UNAVAILABLE
-                    _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {"reason": "same_person_tried_both_slots"}, current_auth_window or "Security")
+                    persons_auth_status = False
+                    _capture(
+                        "DOOR_OPEN_UNAUTHORIZED_PRESENCE",
+                        {"reason": "same_person_tried_both_slots"},
+                        current_auth_window or "Security",
+                    )
                     state_machine.session["captured_violations"].append("SAME_ID")
 
                 if current_auth_window == "evening":
-                    evening_check_done = True
+                    evening_check_done   = True
                     evening_auth_started = False
-                    print(f"[EVENING] Dual Auth FAILED: Same person attempted both unlocks. Exiting.")
+                    print("[EVENING] Dual Auth FAILED: Same person attempted both unlocks.")
                 elif current_auth_window == "morning":
-                    # In morning window, if we are transitioning to open, we don't exit immediately.
-                    # This allows the post-open grace period to settle and confirm the 2 unlockers.
-                    print(f"[MORNING] Potential SAME_ID violation detected (ID {state_machine.session.get('id_a')}). Waiting for door transition.")
-                    # Only mark as FAILED if the door is already OPEN and we are not in grace period
+                    print("[MORNING] Potential SAME_ID violation detected. Waiting for door transition.")
                     if is_door_open and not morning_post_open_started:
                         morning_check_done = True
-                        print(f"[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
-                
+                        print("[MORNING] Dual Auth FAILED: Same person (Door open). Exiting.")
+
                 state_machine.session["violation_type"] = None
 
             if tracking_active and should_process_frame and state_machine.session.get("improper_positioning"):
-                bad_id = state_machine.session["improper_positioning"]
+                bad_id    = state_machine.session["improper_positioning"]
                 bad_label = unlocker_labels.get(bad_id, "ignored detection")
-                visualizer.draw_status_text(frame, f"IMPROPER POSITIONING: {bad_label}",
-                                            (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100))
-                # Intermediary screenshot disabled to ensure 1 screenshot per window
-                # _capture("IMPROPER_POSITIONING", {"person": bad_label}, "Security")
+                visualizer.draw_status_text(
+                    frame, f"IMPROPER POSITIONING: {bad_label}",
+                    (10, 105), color=(0, 165, 255), bg_color=(0, 50, 100),
+                )
 
-            # Detect Door Transition
             door_transition = None
             if last_door_state is not None and last_door_state != is_door_open:
-                if is_door_open:
-                    door_transition = "CLOSED_TO_OPEN"
-                else:
-                    door_transition = "OPEN_TO_CLOSED"
+                door_transition = "CLOSED_TO_OPEN" if is_door_open else "OPEN_TO_CLOSED"
             last_door_state = is_door_open
 
-            # ===== MORNING CHECK (CLOSED -> OPEN) =====
-            # ===== MORNING CHECK (CLOSED -> OPEN) =====
+            # ===== MORNING CHECK =====
             if is_morning_window and not morning_check_done:
-                # Transition Detection (Checked every frame)
                 if door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
-                    morning_post_open_started = True
+                    morning_post_open_started    = True
                     morning_post_open_start_frame = frame_idx
-                    print(f"[MORNING] CLOSED->OPEN detected at {curr_hour_min} IST. "
-                          f"Starting {stream_morning_post_open_auth:.0f}s post-open auth window.")
-                    
-                    # Strict physical presence check: both verified unlockers MUST be in the interaction zone.
-                    # prior_auth bypass removed to ensure they are physically confirmed after door opens.
-                    is_auth = auth_result["authorized"]
+                    print(
+                        f"[MORNING] CLOSED->OPEN detected at {curr_hour_min} IST. "
+                        f"Starting {stream_morning_post_open_auth:.0f}s post-open auth window."
+                    )
+                    is_auth            = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
-
                     if is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
                             "authorized": True,
-                            "p1_id": state_machine.session.get("id_a"),
-                            "p2_id": state_machine.session.get("id_b"),
+                            "p1_id":      state_machine.session.get("id_a"),
+                            "p2_id":      state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": True,
                             "timing": "immediate",
@@ -910,130 +957,143 @@ def main(
                         print(f"[MORNING] Authorized CLOSED->OPEN confirmed immediately at {curr_hour_min} IST.")
                         state_machine.session["door_open_captured"] = True
                         morning_post_open_started = False
-                        morning_check_done = True
-                        # No return — loop must keep running for midnight reset and evening window
+                        morning_check_done        = True
 
-                # 3. Ongoing Grace Window Logic
                 if morning_post_open_started:
-                    elapsed = (frame_idx - morning_post_open_start_frame) / fps
-                    is_auth = auth_result["authorized"]
+                    elapsed            = (frame_idx - morning_post_open_start_frame) / fps
+                    is_auth            = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
 
                     if is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
                             "authorized": True,
-                            "p1_id": state_machine.session.get("id_a"),
-                            "p2_id": state_machine.session.get("id_b"),
+                            "p1_id":      state_machine.session.get("id_a"),
+                            "p2_id":      state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": True,
                         }, "Morning")
                         print(f"[MORNING] Authorized CLOSED->OPEN confirmed at {curr_hour_min} IST.")
                         state_machine.session["door_open_captured"] = True
                         morning_post_open_started = False
-                        morning_check_done = True
+                        morning_check_done        = True
                     elif elapsed >= stream_morning_post_open_auth:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
-                            "p1_id": state_machine.session.get("id_a"),
-                            "p2_id": state_machine.session.get("id_b"),
+                            "p1_id":      state_machine.session.get("id_a"),
+                            "p2_id":      state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": both_in_interaction,
                             "reason": "missing_dual_auth_or_interaction_zone",
                         }, "Morning")
-                        print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN (timeout {elapsed:.1f}s) at {curr_hour_min} IST.")
+                        print(
+                            f"[MORNING] UNAUTHORIZED CLOSED->OPEN "
+                            f"(timeout {elapsed:.1f}s) at {curr_hour_min} IST."
+                        )
                         state_machine.session["door_open_captured"] = True
                         morning_post_open_started = False
-                        morning_check_done = True
+                        morning_check_done        = True
                     else:
                         rem = stream_morning_post_open_auth - elapsed
-                        visualizer.draw_status_text(frame, f"MORNING CHECK: CONFIRMING UNLOCKERS ({rem:.1f}s)",
-                                                    (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20))
-                
-                # 4. Idle/Waiting Display (if not in grace window and not done)
+                        visualizer.draw_status_text(
+                            frame, f"MORNING CHECK: CONFIRMING UNLOCKERS ({rem:.1f}s)",
+                            (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20),
+                        )
+
                 elif not morning_check_done:
                     if door_transition_pending:
-                        visualizer.draw_status_text(frame, "STATUS: DOOR STATE STABILIZING...",
-                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                        visualizer.draw_status_text(
+                            frame, "STATUS: DOOR STATE STABILIZING...",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
                     elif auth_result["authorized"]:
-                        visualizer.draw_status_text(frame, "MORNING CHECK: 2 UNLOCKERS READY - WAITING FOR CLOSED->OPEN",
-                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                        visualizer.draw_status_text(
+                            frame, "MORNING CHECK: 2 UNLOCKERS READY - WAITING FOR CLOSED->OPEN",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
                     else:
-                        visualizer.draw_status_text(frame, "MORNING CHECK: IDENTIFYING 2 UNLOCKERS",
-                                                    (10, 130), color=(0, 165, 255))
-            # ===== EVENING CHECK (OPEN -> CLOSED) =====
+                        visualizer.draw_status_text(
+                            frame, "MORNING CHECK: IDENTIFYING 2 UNLOCKERS",
+                            (10, 130), color=(0, 165, 255),
+                        )
+
+            # ===== EVENING CHECK =====
             elif is_evening_window and not evening_check_done:
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:
                     state_machine.reset_session()
                     evening_auth_started = True
-                    tracking_active = True
+                    tracking_active      = True
                     state_machine.session["door_closing_start_frame"] = frame_idx
-                    print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting 5-minute unlocker check.")
+                    print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
                 if evening_auth_started:
-                    if "door_closing_start_frame" not in state_machine.session or state_machine.session["door_closing_start_frame"] is None:
+                    if (
+                        "door_closing_start_frame" not in state_machine.session
+                        or state_machine.session["door_closing_start_frame"] is None
+                    ):
                         state_machine.session["door_closing_start_frame"] = frame_idx
 
-                    elapsed_frames = frame_idx - state_machine.session["door_closing_start_frame"]
+                    elapsed_frames  = frame_idx - state_machine.session["door_closing_start_frame"]
                     elapsed_seconds = elapsed_frames / fps
-                    is_auth = auth_result["authorized"]
+                    is_auth         = auth_result["authorized"]
 
                     if is_auth:
                         persons_auth_status = True
                         _capture("DOOR_CLOSE_AUTHORIZED_PRESENCE", {
                             "authorized": True,
-                            "p1_id": state_machine.session.get("id_a"),
-                            "p2_id": state_machine.session.get("id_b"),
-                            "wait_time": f"{elapsed_seconds:.1f}s",
+                            "p1_id":      state_machine.session.get("id_a"),
+                            "p2_id":      state_machine.session.get("id_b"),
+                            "wait_time":  f"{elapsed_seconds:.1f}s",
                         }, "Evening")
                         print(f"[EVENING] Authorized closure confirmed at {curr_hour_min} IST.")
-                        evening_check_done = True
+                        evening_check_done   = True
                         evening_auth_started = False
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
-                            "p1_id": state_machine.session.get("id_a"),
-                            "p2_id": state_machine.session.get("id_b"),
-                            "wait_time": f"{elapsed_seconds:.1f}s Timeout",
-                            "reason": "second_unlocker_timeout",
+                            "p1_id":      state_machine.session.get("id_a"),
+                            "p2_id":      state_machine.session.get("id_b"),
+                            "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
+                            "reason":     "second_unlocker_timeout",
                         }, "Evening")
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
-                        evening_check_done = True
+                        evening_check_done   = True
                         evening_auth_started = False
                     else:
                         wait_time_rem = stream_evening_second_unlocker_timeout - elapsed_seconds
-                        visualizer.draw_status_text(frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
-                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                        visualizer.draw_status_text(
+                            frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
                 else:
                     if door_transition_pending:
-                        visualizer.draw_status_text(frame, "STATUS: DOOR STATE STABILIZING...",
-                                                    (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50))
+                        visualizer.draw_status_text(
+                            frame, "STATUS: DOOR STATE STABILIZING...",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
                     else:
-                        # Removed 'Door already closed' auto-skip logic to prevent premature completion
-                        # when door status is flickering or in a neutral state at window start.
-                        visualizer.draw_status_text(frame, "STATUS: EVENING WINDOW OPEN - WATCHING FOR OPEN->CLOSE",
-                                                    (10, 130), color=(0, 165, 255))
-            
+                        visualizer.draw_status_text(
+                            frame, "STATUS: EVENING WINDOW OPEN - WATCHING FOR OPEN->CLOSE",
+                            (10, 130), color=(0, 165, 255),
+                        )
+
             else:
-                # Idle state
-                status_msg = "STATUS: SYSTEM IDLE (OUTSIDE WINDOWS)"
                 if not is_morning_window and not is_evening_window:
                     status_msg = f"STATUS: IDLE | NEXT WINDOW: {'MORNING' if curr_hour_min < '06:00' else 'EVENING'}"
                 elif morning_check_done and is_morning_window:
                     status_msg = "STATUS: MORNING CHECK COMPLETE"
                 elif evening_check_done and is_evening_window:
                     status_msg = "STATUS: EVENING CHECK COMPLETE"
-
+                else:
+                    status_msg = "STATUS: SYSTEM IDLE (OUTSIDE WINDOWS)"
                 visualizer.draw_status_text(frame, status_msg, (10, 130), color=(200, 200, 200))
 
-            # Reset opening state machine flag if door closes normally outside of windows
             if not is_door_open:
-                state_machine.session["door_open_captured"] = False
+                state_machine.session["door_open_captured"]    = False
                 state_machine.session["door_opening_start_frame"] = None
             else:
-                # Reset closing flag if door opens
                 state_machine.session["door_closing_start_frame"] = None
 
             if (
@@ -1042,11 +1102,10 @@ def main(
                 and auth_result["authorized"]
                 and not auth_success_logged_by_window.get(active_auth_window, False)
             ):
-                # Window-scoped auth success logging (non-screenshot).
                 alert_system.log_event("DUAL_AUTH_SUCCESS", {
                     "window": active_auth_window,
-                    "p1_id": state_machine.session.get("id_a"),
-                    "p2_id": state_machine.session.get("id_b")
+                    "p1_id":  state_machine.session.get("id_a"),
+                    "p2_id":  state_machine.session.get("id_b"),
                 })
                 auth_success_logged_by_window[active_auth_window] = True
                 runtime_logger.write_event(
@@ -1055,8 +1114,8 @@ def main(
                     level="INFO",
                     details={
                         "window": active_auth_window,
-                        "p1_id": state_machine.session.get("id_a"),
-                        "p2_id": state_machine.session.get("id_b"),
+                        "p1_id":  state_machine.session.get("id_a"),
+                        "p2_id":  state_machine.session.get("id_b"),
                     },
                     frame_idx=frame_idx,
                 )
@@ -1064,33 +1123,41 @@ def main(
 
             # ===== TEST WINDOW EXIT =====
             if test_window:
-                check_done = (test_window == "morning" and morning_check_done) or \
-                             (test_window == "evening" and evening_check_done)
+                check_done = (
+                    (test_window == "morning" and morning_check_done)
+                    or (test_window == "evening" and evening_check_done)
+                )
                 if check_done:
                     print(f"[SYSTEM] Test window '{test_window}' check complete. Exiting.")
                     break
 
             # ===== PROGRESS LOG =====
             if (tracking_active or debug) and frame_idx % 30 == 0:
-                timers = (f"P1:{state_machine.session['timer_a_seconds']:.1f}s "
-                          f"P2:{state_machine.session['timer_b_seconds']:.1f}s")
-                cand_a = f"ID {state_machine.session['candidate_a']}" if state_machine.session["candidate_a"] is not None else "-"
-                cand_b = f"ID {state_machine.session['candidate_b']}" if state_machine.session["candidate_b"] is not None else "-"
-                id_a = f"ID {state_machine.session['id_a']}" if state_machine.session["id_a"] is not None else "-"
-                id_b = f"ID {state_machine.session['id_b']}" if state_machine.session["id_b"] is not None else "-"
+                timers  = (
+                    f"P1:{state_machine.session['timer_a_seconds']:.1f}s "
+                    f"P2:{state_machine.session['timer_b_seconds']:.1f}s"
+                )
+                cand_a  = f"ID {state_machine.session['candidate_a']}" if state_machine.session["candidate_a"] is not None else "-"
+                cand_b  = f"ID {state_machine.session['candidate_b']}" if state_machine.session["candidate_b"] is not None else "-"
+                id_a    = f"ID {state_machine.session['id_a']}"        if state_machine.session["id_a"] is not None else "-"
+                id_b    = f"ID {state_machine.session['id_b']}"        if state_machine.session["id_b"] is not None else "-"
                 ssim_str = f" | Door SSIM: {ssim_val:.3f}" if ssim_val is not None else ""
                 intensity_str = ""
                 if debug and ssim_val is not None and intensity_val is not None:
                     intensity_str = f" | Intensity: {intensity_val:.1f} (Δ{intensity_diff:.1f})"
-                
-                # Fix: Handle RTSP live streams which return negative or garbage total_frames
+                timeout_str = (
+                    f" | LKG timeouts: {lkg_consecutive_timeouts}"
+                    if lkg_consecutive_timeouts > 0 else ""
+                )
                 total_frames_val = total_frames if total_frames > 0 else "LIVE"
-                progress_val = f"({video.get_progress():.1f}%)" if total_frames > 0 else ""
-                
-                print(f"[PROGRESS] Frame {frame_idx}/{total_frames_val} {progress_val} "
-                      f"| Unlockers: {n} | State: {state_machine.session['sequence_state']} "
-                      f"| Candidates: P1={cand_a} P2={cand_b} "
-                      f"| Verified: P1={id_a} P2={id_b} | {timers}{ssim_str}{intensity_str}")
+                progress_val     = f"({video.get_progress():.1f}%)" if total_frames > 0 else ""
+                print(
+                    f"[PROGRESS] Frame {frame_idx}/{total_frames_val} {progress_val} "
+                    f"| Unlockers: {n} | State: {state_machine.session['sequence_state']} "
+                    f"| Candidates: P1={cand_a} P2={cand_b} "
+                    f"| Verified: P1={id_a} P2={id_b} | {timers}"
+                    f"{ssim_str}{intensity_str}{timeout_str}"
+                )
 
             if live_window_available:
                 try:
@@ -1099,7 +1166,8 @@ def main(
                     else:
                         display_frame = clean_frame.copy()
                         visualizer.draw_client_overlays(
-                            display_frame, unlocker_labels, tracked_persons, auth_result, is_door_open,
+                            display_frame, unlocker_labels, tracked_persons,
+                            auth_result, is_door_open,
                             persons_auth_status=persons_auth_status,
                         )
                     cv2.imshow(f"Two-Man Rule Live ROI Debug - {cam_id}", display_frame)
@@ -1119,66 +1187,23 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Two-Man Rule monitoring with live ROI overlay.")
-    parser.add_argument("--stream-index", type=int, default=None, help="Index of the stream config to use from config.STREAMS_CONFIG. If omitted, runs all streams in parallel.")
+    parser.add_argument("--stream-index", type=int, default=None)
+    parser.add_argument("--stream-indices", type=str, default=None,
+                        help="Comma-separated stream indexes (e.g. 0,2,4).")
+    parser.add_argument("video_source", nargs="?", default=None)
+    parser.add_argument("--show", action="store_true")
+    parser.add_argument("--scale-rois", action="store_true")
+    parser.add_argument("--process-every", type=int, default=3)
+    parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
+    parser.add_argument("--no-half", action="store_true")
+    parser.add_argument("--show-all-detections", action="store_true")
+    parser.add_argument("--test-window", type=str, choices=["morning", "evening"], default=None)
     parser.add_argument(
-        "--stream-indices",
-        type=str,
-        default=None,
-        help="Comma-separated stream indexes to run in parallel (example: 0,2,4).",
-    )
-    parser.add_argument("video_source", nargs="?", default=None, help="Video file path, RTSP stream, or webcam index (overrides config).")
-    parser.add_argument("--show", action="store_true", help="Enable live OpenCV preview window.")
-    parser.add_argument(
-        "--scale-rois",
-        action="store_true",
-        help="Scale the RTSP-calibrated 2688x1520 ROIs to a different video resolution.",
-    )
-    parser.add_argument(
-        "--process-every",
-        type=int,
-        default=3,
-        help="Run pose inference every N frames for smoother live preview. Use 1 for full per-frame analysis.",
-    )
-    parser.add_argument(
-        "--device",
-        choices=["auto", "cuda", "cpu"],
-        default="auto",
-        help="Inference device. Use cuda to force the system GPU.",
-    )
-    parser.add_argument(
-        "--no-half",
-        action="store_true",
-        help="Disable CUDA half precision inference.",
-    )
-    parser.add_argument(
-        "--show-all-detections",
-        action="store_true",
-        help="Show unlabeled raw person detections for calibration/debugging.",
-    )
-    parser.add_argument(
-        "--test-window",
-        type=str,
-        choices=["morning", "evening"],
-        default=None,
-        help="Test mode: force morning or evening window logic regardless of current time.",
-    )
-    parser.add_argument(
-        "--shared-inference",
-        action="store_true",
+        "--shared-inference", action="store_true",
         default=getattr(config, "SHARED_INFERENCE_ENABLED", False),
-        help="Enable shared GPU inference server to save VRAM across multiple streams.",
     )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Show all debug overlays on live window (ROIs, SSIM, AI stats, all detections). Screenshots remain clean.",
-    )
-    parser.add_argument(
-        "--shm-slot",
-        type=int,
-        default=-1,
-        help="Shared memory slot index assigned to this worker.",
-    )
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--shm-slot", type=int, default=-1)
     args = parser.parse_args()
 
     if args.stream_indices is not None and args.stream_index is not None:
@@ -1187,16 +1212,16 @@ if __name__ == "__main__":
 
     def _parse_stream_indices(indices_text: str, total_streams: int) -> list:
         parsed = []
-        seen = set()
+        seen   = set()
         for token in indices_text.split(","):
             token = token.strip()
             if not token:
                 continue
             if not token.isdigit():
-                raise ValueError(f"Invalid stream index '{token}'. Use comma-separated integers like 0,2,4")
+                raise ValueError(f"Invalid stream index '{token}'.")
             idx = int(token)
             if idx < 0 or idx >= total_streams:
-                raise ValueError(f"Invalid stream-index {idx}. Available streams: 0 to {total_streams - 1}.")
+                raise ValueError(f"Invalid stream-index {idx}. Available: 0 to {total_streams - 1}.")
             if idx not in seen:
                 parsed.append(idx)
                 seen.add(idx)
@@ -1206,7 +1231,7 @@ if __name__ == "__main__":
 
     if args.stream_indices is not None:
         if args.video_source is not None:
-            print("[ERROR] video_source override is only supported with a single stream (--stream-index).")
+            print("[ERROR] video_source override is only supported with a single stream.")
             sys.exit(1)
         try:
             selected_stream_indexes = _parse_stream_indices(args.stream_indices, len(config.STREAMS_CONFIG))
@@ -1216,72 +1241,72 @@ if __name__ == "__main__":
     elif args.stream_index is not None:
         selected_stream_indexes = [args.stream_index]
     elif args.video_source is not None:
-        # Backwards compatibility: if testing a specific video without stream-index, default to 0
         selected_stream_indexes = [0]
     else:
-        # No parameters provided -> run all streams in parallel
         selected_stream_indexes = list(range(len(config.STREAMS_CONFIG)))
 
     if len(selected_stream_indexes) > 1:
         import subprocess
         if len(selected_stream_indexes) == len(config.STREAMS_CONFIG):
-            print(f"[SYSTEM] No stream parameters provided. Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
+            print(f"[SYSTEM] Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
         else:
-            print(f"[SYSTEM] Launching selected streams in parallel: {selected_stream_indexes}")
-        processes = []
+            print(f"[SYSTEM] Launching selected streams: {selected_stream_indexes}")
 
-        base_cmd = [sys.executable, sys.argv[0]]
+        processes = []
+        base_cmd  = [sys.executable, sys.argv[0]]
         if args.show:
-            print("[WARNING] --show enabled. OpenCV GUI rendering adds significant CPU/latency overhead and is NOT recommended for production.")
+            print("[WARNING] --show adds GPU/CPU overhead; not recommended for production.")
             base_cmd.append("--show")
-        if args.scale_rois:
-            base_cmd.append("--scale-rois")
+        if args.scale_rois:          base_cmd.append("--scale-rois")
         base_cmd.extend(["--process-every", str(args.process_every)])
         base_cmd.extend(["--device", args.device])
-        if args.no_half:
-            base_cmd.append("--no-half")
-        if args.show_all_detections:
-            base_cmd.append("--show-all-detections")
-        if args.test_window:
-            base_cmd.extend(["--test-window", args.test_window])
-        if args.debug:
-            base_cmd.append("--debug")
+        if args.no_half:             base_cmd.append("--no-half")
+        if args.show_all_detections: base_cmd.append("--show-all-detections")
+        if args.test_window:         base_cmd.extend(["--test-window", args.test_window])
+        if args.debug:               base_cmd.append("--debug")
 
         if args.shared_inference:
             base_cmd.append("--shared-inference")
-            print("[SYSTEM] Shared Inference mode enabled. Initializing GPU Master...")
-            
-            # Create SharedMemory buffer
+            print("[SYSTEM] Shared Inference mode enabled. Initialising GPU Master...")
+
             from multiprocessing.shared_memory import SharedMemory
             shm_size = getattr(config, "MAX_SHARED_MEMORY_MB", 2048) * 1024 * 1024
             try:
                 shm = SharedMemory(create=True, size=shm_size)
-                print(f"[SYSTEM] Created {shm_size/1024/1024:.0f}MB SharedMemory buffer: {shm.name}")
+                print(f"[SYSTEM] Created {shm_size // (1024*1024)}MB SharedMemory: {shm.name}")
             except Exception as e:
-                print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to Queue-based passing.")
+                print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to queue copy.")
                 shm = None
 
-            # All shared objects created via Manager for picklable proxies.
-            manager = mp.Manager()
-            req_q = manager.Queue()   # Single request queue (all workers → server)
-            res_q = manager.Queue()   # Single response queue (server → workers, tagged)
+            # ------------------------------------
+            # NEW: response_registry replaces single shared response_queue.
+            # It is a Manager dict {client_id -> mp.Queue} that the GPU server
+            # uses to route results directly to the requesting worker.
+            # ------------------------------------
+            manager          = mp.Manager()
+            req_q            = manager.Queue()
+            response_registry = manager.dict()   # {client_id: mp.Queue}  ← NEW
 
             shm_config = manager.dict({
-                'name': shm.name if shm else None,
-                'slot_size': shm_size // 100,  # Support 100 SHM slots
-                'slot_map': {},
+                'name':      shm.name if shm else None,
+                'slot_size': shm_size // 100,
+                'slot_map':  {},
             })
 
-            from models.pose_detector import start_inference_manager
-            manager_server = start_inference_manager(req_q, res_q, shm_config)
-            import threading
+            manager_server = start_inference_manager(req_q, response_registry, shm_config)
             threading.Thread(target=manager_server.serve_forever, daemon=True).start()
 
-            from models.pose_detector import _InferenceServer
-            gpu_server = _InferenceServer(device=args.device, half=not args.no_half)
-            server_proc = mp.Process(target=gpu_server.run, args=(req_q, res_q, shm.name if shm else None), daemon=True)
+            gpu_server  = _InferenceServer(device=args.device, half=not args.no_half)
+            server_proc = mp.Process(
+                target=gpu_server.run,
+                args=(req_q, response_registry, shm.name if shm else None),
+                daemon=True,
+            )
             server_proc.start()
-            print(f"[SYSTEM] GPU Master active (PID: {server_proc.pid}). Consolidating VRAM for {len(selected_stream_indexes)} streams.")
+            print(
+                f"[SYSTEM] GPU Master active (PID: {server_proc.pid}). "
+                f"Per-client routing enabled for {len(selected_stream_indexes)} streams."
+            )
 
         for pos, i in enumerate(selected_stream_indexes):
             cmd = base_cmd + ["--stream-index", str(i)]
@@ -1291,31 +1316,31 @@ if __name__ == "__main__":
             processes.append((p, cmd, i))
             print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
 
-            # Staggered Startup (Production Safety)
             if pos < len(selected_stream_indexes) - 1:
                 delay = getattr(config, "STAGGER_START_DELAY", 2.0)
                 print(f"[SYSTEM] Waiting {delay}s before next launch...")
                 time.sleep(delay)
 
-        print("[SYSTEM] Selected streams launched. Supervisor active.")
+        print("[SYSTEM] All streams launched. Supervisor active.")
         try:
             while True:
                 time.sleep(5)
-                # Watchdog / Supervisor logic
                 for idx, (p, cmd, s_idx) in enumerate(processes):
                     if p.poll() is not None:
-                        print(f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died with code {p.returncode}. Restarting...")
+                        print(
+                            f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died "
+                            f"(code {p.returncode}). Restarting..."
+                        )
                         new_p = subprocess.Popen(cmd)
                         processes[idx] = (new_p, cmd, s_idx)
-                        print(f"[WATCHDOG] Stream {s_idx} restarted (New PID: {new_p.pid})")
+                        print(f"[WATCHDOG] Stream {s_idx} restarted (PID: {new_p.pid})")
         except KeyboardInterrupt:
-            print("\n[SYSTEM] Shutting down selected streams...")
+            print("\n[SYSTEM] Shutting down...")
             for p, _, _ in processes:
                 p.terminate()
                 try:
                     p.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    print(f"[SYSTEM] Force killing PID {p.pid}")
                     p.kill()
             if args.shared_inference and 'server_proc' in locals():
                 print("[SYSTEM] Shutting down GPU Master...")
@@ -1326,14 +1351,13 @@ if __name__ == "__main__":
                     shm.unlink()
         sys.exit(0)
 
+    # ---- Single stream path ----
     args.stream_index = selected_stream_indexes[0]
-
     if args.stream_index < 0 or args.stream_index >= len(config.STREAMS_CONFIG):
-        print(f"[ERROR] Invalid stream-index {args.stream_index}. Available streams: 0 to {len(config.STREAMS_CONFIG)-1}.")
+        print(f"[ERROR] Invalid stream-index {args.stream_index}.")
         sys.exit(1)
 
     stream_config = config.STREAMS_CONFIG[args.stream_index]
-    # Inject assigned SHM slot into stream_config for main() to pick up
     if args.shm_slot >= 0:
         stream_config['shm_slot'] = args.shm_slot
 
@@ -1341,13 +1365,10 @@ if __name__ == "__main__":
     if video_source is not None and video_source.isdigit():
         video_source = int(video_source)
 
-    # ── Production restart wrapper ────────────────────────────────────────────
-    # For single-stream mode (no watchdog parent), restart automatically on any
-    # unhandled exception or clean exit so the system runs 24/7.
-    # File/webcam sources (non-RTSP) exit cleanly when video ends — don't loop.
     _is_live = video_source is None or (
         isinstance(video_source, str) and video_source.lower().startswith("rtsp://")
     )
+
     while True:
         _restore_terminal_capture = enable_terminal_capture(
             base_dir=config.BASE_LOG_DIR,
@@ -1378,17 +1399,14 @@ if __name__ == "__main__":
                 import traceback; traceback.print_exc()
 
             if not _is_live:
-                # Non-RTSP source (file/webcam) — don't auto-restart after video ends
                 break
 
             print("[SYSTEM] Restarting stream in 10 seconds...")
             should_sleep_before_restart = True
         finally:
             if args.shared_inference and detector:
-                # Cleanup: remove our response queue from the shared manager
                 detector.cleanup()
             _restore_terminal_capture()
 
         if should_sleep_before_restart:
             time.sleep(10)
-

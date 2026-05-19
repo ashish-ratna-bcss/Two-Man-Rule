@@ -79,6 +79,31 @@ RTSP_LOW_LATENCY = True
 STAGGER_START_DELAY = 2.0  # Seconds between stream launches
 MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 
+
+# ============ SHARED INFERENCE & SCALING ============
+# When True, multiple streams share a single YOLO instance to save VRAM.
+SHARED_INFERENCE_ENABLED = True   # Enabled by default for high-density scalability
+BATCH_SIZE_LIMIT = 32             # Max frames to process in one GPU call
+INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
+GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
+MAX_SHARED_MEMORY_MB = 4096       # Buffer for passing frames between processes (4GB)
+
+# ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
+# How long (seconds) a camera worker waits on its private response queue before
+# treating a GPU reply as lost.  Set to 3× your p99 inference latency.
+# At batch_size=8, process_every=3, 15fps → inference ~40-80ms → 0.5s is ample.
+# Keep at 2.0s initially; tune down once you confirm GPU health.
+INFERENCE_TIMEOUT_SECONDS: float = 2.0
+
+# How many consecutive inference timeouts to tolerate before the tracker stops
+# coasting on LKG and starts using empty detections (track ageing).
+# During LKG reuse the FSM is frozen — timers don't reset, UNAUTHORIZED is not fired.
+# After this threshold the camera logs DEGRADED (ops alert) instead of UNAUTHORIZED.
+# Formula: LKG_MAX_CONSECUTIVE_TIMEOUTS × process_every / fps = coast duration seconds
+# Default: 15 × 3 / 15 = 3.0s of coast time before graceful track ageing begins.
+LKG_MAX_CONSECUTIVE_TIMEOUTS: int = 15
+
+
 STREAMS_CONFIG = [
     # Stream 0
     {
@@ -87,9 +112,6 @@ STREAMS_CONFIG = [
         "site_id": "1",
         "site_name": "somajiguda",
         "closed_door_reference": "close_doors/closed_GF-1-CAM-40.jpg",
-        # Lowered from 0.92: DOOR_CORNER patch is flat dark door surface (std≈2.4).
-        # On such zero-texture patches SSIM stays >0.95 even with +20px brightness
-        # shift, so 0.92 never fires.  0.80 gives reliable open detection.
         "ssim_threshold": 0.80,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
@@ -99,9 +121,9 @@ STREAMS_CONFIG = [
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
-        "mirror_left_right": False,  # Person faces door (back to top-down cam): right hand IS on video-right, left on video-left
+        "mirror_left_right": False,
         "rois": {
-                "LOCKS_ROI": np.array([(584, 272), (888, 117), (1002, 525), (673, 690)], np.int32),
+            "LOCKS_ROI": np.array([(584, 272), (888, 117), (1002, 525), (673, 690)], np.int32),
             "DOOR_ROI": np.array([(548, 55), (787, 721), (1047, 570), (926, 2), (665, 0)], np.int32),
             "DOOR_CORNER_ROI": np.array([[640.30, 13.22], [659.51, 73.73], [845.86, 9.38]], np.int32),
             "STANDING_ZONE": np.array([(801, 753), (1067, 597), (1184, 724), (882, 887)], np.int32),
@@ -163,9 +185,6 @@ STREAMS_CONFIG = [
         "site_id": "4",
         "site_name": "vijayawada",
         "closed_door_reference": "close_doors/closed_GF-4-CAM-20.jpg",
-        # Lowered from 0.92: DOOR_CORNER patch is dark/uniform (std≈3.2, only 22x43px).
-        # High SSIM threshold never fires on low-texture patches.
-        #  recalibrate DOOR_CORNER_ROI to a larger area with visible door edge.
         "ssim_threshold": 0.80,
         "debounce_threshold": 5,
         "intensity_threshold": 10,
@@ -179,12 +198,7 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
             "DOOR_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
             "LOCKS_ROI": np.array([(708, 31), (1217, 31), (1224, 425), (507, 478)], np.int32),
-            # Recalibrated: old 22x43px crop at (1218,1) was on flat dark door surface (std=3.2).
-            # New 150x80px crop captures door-frame-to-wall transition (ref_std=84.2).
-            # SSIM closed=0.82-0.85, open≈0.60 → threshold 0.75 gives reliable detection.
-            # "DOOR_CORNER_ROI": np.array([(1164, 2), (1243, 95), (1243, 4)], np.int32), #right top triagnle 
             "DOOR_CORNER_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
- 
             "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
         }
     },
@@ -224,13 +238,20 @@ STREAMS_CONFIG = [
         "intensity_threshold": 12,
         "motion_threshold": 5.0,
         "door_corner_min_visible_ratio": 0.3,
-        "min_unlock_seconds": 0.2,
+        # NOTE: min_unlock_seconds was 0.2 (200ms) — almost certainly a calibration
+        # accident.  At process_every=3 and 15fps that is ~3 frames: one inference
+        # cycle.  The camera had 160 inference timeouts and zero authorized captures
+        # in the incident logs.  Raised to 1.5s (a conservative minimum) so the
+        # timer has time to accumulate across multiple successful inference cycles.
+        # Re-tune upward (2.5–3.0s recommended) once the queue fix is deployed
+        # and you can confirm clean detections on this stream.
+        "min_unlock_seconds": 1.5,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "STANDING_ZONE": np.array([(1116, 411), (983, 528), (1293, 664), (1569, 607)], np.int32),
-            "LOCKS_ROI":  np.array([(955, 2), (1046, 251), (1523, 192), (1523, 192), (1537, 2)], np.int32),
+            "LOCKS_ROI": np.array([(955, 2), (1046, 251), (1523, 192), (1523, 192), (1537, 2)], np.int32),
             "DOOR_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "DOOR_CORNER_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
@@ -289,41 +310,62 @@ STREAMS_CONFIG = [
 BASE_OUTPUT_DIR = "strong_room_opening"
 BASE_LOG_DIR = "logs"
 
+
 def create_session():
-    """Create a fresh session state dict."""
+    """Create a fresh session state dict.
+
+    All keys that main.py or state_machine.py ever reads from session must be
+    initialised here.  Missing keys cause silent KeyErrors when reset_session()
+    is called mid-stream — a particularly hard class of bug because the error
+    only surfaces in the second auth window of a 24-hour run.
+    """
     return {
+        # ---- FSM sequence state ----
         "sequence_state": "WAITING_FOR_FIRST_UNLOCKER",
-        # Candidates: person currently attempting an unlock (not yet verified)
+
+        # ---- Candidates: person currently attempting an unlock (not yet verified) ----
         "candidate_a": None,
         "candidate_b": None,
-        # Official IDs: assigned ONLY after one complete 6-10s lock interaction
+
+        # ---- Official IDs: assigned ONLY after one complete lock interaction ----
         "id_a": None,
         "id_b": None,
+
+        # ---- Timers ----
         "timer_a_frames": 0,
         "timer_b_frames": 0,
         "timer_a_seconds": 0.0,
         "timer_b_seconds": 0.0,
+
+        # ---- Grace buffers (frames a verified unlocker can be absent before departure) ----
         "grace_buffer_a": 0,
         "grace_buffer_b": 0,
+
+        # ---- Violation tracking ----
         "improper_positioning": None,
         "violation_type": None,
         "captured_violations": [],
         "same_id_return_timer_frames": 0,
         "same_id_return_grace_frames": 0,
+
+        # ---- Door state tracking ----
+        # Set True once a DOOR_OPEN_* capture has been written for this session,
+        # so main.py does not fire a second capture on the same opening event.
+        "door_open_captured": False,
+        # Frame index when the CLOSED→OPEN transition was first detected.
+        # Reset to None when door closes.  Used by morning post-open grace window.
+        "door_opening_start_frame": None,
+        # Frame index when the OPEN→CLOSED transition was first detected.
+        # Reset to None when door opens.  Used by evening countdown timer.
+        "door_closing_start_frame": None,
     }
+
 
 def calculate_min_unlock_frames(fps):
     """Convert minimum unlock seconds to frame count based on actual video FPS."""
     return int(MIN_UNLOCK_SECONDS * fps)
 
+
 def calculate_max_unlock_frames(fps):
     """Convert maximum unlock seconds to frame count based on actual video FPS."""
     return int(MAX_UNLOCK_SECONDS * fps)
-
-# ============ SHARED INFERENCE & SCALING ============
-# When True, multiple streams share a single YOLO instance to save VRAM.
-SHARED_INFERENCE_ENABLED = True  # Enabled by default for high-density scalability
-BATCH_SIZE_LIMIT = 32             # Max frames to process in one GPU call
-INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
-GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
-MAX_SHARED_MEMORY_MB = 4096       # Buffer for passing frames between processes (4GB)

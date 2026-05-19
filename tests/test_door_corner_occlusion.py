@@ -37,7 +37,7 @@ def test_clear_roi_reaches_verification(tmp_path, monkeypatch):
     frame = np.full((100, 100, 3), 100, dtype=np.uint8)
     calls = []
 
-    def _capture(curr_patch, reference_patch):
+    def _capture(curr_patch, reference_patch, visible_mask):
         calls.append((curr_patch.copy(), reference_patch.copy()))
         return True
 
@@ -56,11 +56,11 @@ def test_partial_occlusion_uses_remaining_area(tmp_path, monkeypatch):
     frame = np.full((100, 100, 3), 100, dtype=np.uint8)
     calls = []
 
-    def _capture(curr_patch, reference_patch):
-        calls.append((curr_patch.copy(), reference_patch.copy()))
-        return False
+    def _mock_ssim(im1, im2, **kwargs):
+        calls.append((im2.copy(), im1.copy()))
+        return 0.95
 
-    monkeypatch.setattr(verifier, "_run_verification", _capture)
+    monkeypatch.setattr("models.door_verifier.ssim", _mock_ssim)
 
     tracked_persons = {
         1: {"bbox": (20, 20, 42, 80)},
@@ -72,8 +72,7 @@ def test_partial_occlusion_uses_remaining_area(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert verifier.last_visible_ratio >= 0.5
     assert calls[0][0][30, 30] == calls[0][1][30, 30]
-    assert np.count_nonzero(calls[0][0] == 100) > 0
-    assert np.count_nonzero(calls[0][0] == calls[0][1]) > 0
+    assert np.count_nonzero(calls[0][0] != calls[0][1]) > 0
 
 
 def test_below_threshold_freezes_stable_state(tmp_path, monkeypatch):
