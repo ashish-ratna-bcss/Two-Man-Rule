@@ -262,7 +262,7 @@ STREAMS_CONFIG = [
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.97.83:8001/Streaming/Channels/1801",
         "camera_id": "GF-6-CAM-18",
         "site_id": "6",
-        "site_name": "himayathnagar",
+        "site_name": "himayatnagar",
         "closed_door_reference": "close_doors/closed_GF-6-CAM-18.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 20,
