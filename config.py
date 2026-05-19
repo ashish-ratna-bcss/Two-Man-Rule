@@ -190,7 +190,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 10,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.3,
-        "min_unlock_seconds": 2.0,
+        "min_unlock_seconds": 1.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 50.0,
@@ -245,7 +245,7 @@ STREAMS_CONFIG = [
         # timer has time to accumulate across multiple successful inference cycles.
         # Re-tune upward (2.5–3.0s recommended) once the queue fix is deployed
         # and you can confirm clean detections on this stream.
-        "min_unlock_seconds": 1.5,
+        "min_unlock_seconds": 1.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 4.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -293,7 +293,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 4.5,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "morning_post_open_auth_seconds": 5.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
