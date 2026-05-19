@@ -4,7 +4,7 @@ import numpy as np
 # ============ VIDEO & FPS ============
 DEFAULT_FPS = 30  # Will be overridden by actual video FPS
 GRACE_BUFFER_FRAMES = 15  # 0.5s at 30 FPS
-MORNING_POST_OPEN_AUTH_SECONDS = 7.0   # fallback default; prefer per-stream "morning_post_open_auth_seconds"
+
 EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS = 300.0  # fallback default; prefer per-stream "evening_second_unlocker_timeout_seconds"
 
 # ============ TIMERS (in seconds) ============
@@ -119,7 +119,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 5.0,
+
         "evening_second_unlocker_timeout_seconds": 300.0,
         "mirror_left_right": False,
         "rois": {
@@ -144,7 +144,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 5.0,
+
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
@@ -168,7 +168,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 7.0,
+
         "evening_second_unlocker_timeout_seconds": 50.0,
         "rois": {
             "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
@@ -192,7 +192,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.3,
         "min_unlock_seconds": 1.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 5.0,
+
         "evening_second_unlocker_timeout_seconds": 50.0,
         "rois": {
             "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
@@ -216,7 +216,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 3.0,
+
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "DOOR_CORNER_ROI": np.array([(803, 2), (908, 1), (798, 37)], np.int32),
@@ -233,7 +233,7 @@ STREAMS_CONFIG = [
         "site_id": "3",
         "site_name": "vizag",
         "closed_door_reference": "close_doors/closed_FF-3-CAM-21.jpg",
-        "ssim_threshold": 0.80,
+        "ssim_threshold": 0.70,
         "debounce_threshold": 7,
         "intensity_threshold": 12,
         "motion_threshold": 5.0,
@@ -247,7 +247,7 @@ STREAMS_CONFIG = [
         # and you can confirm clean detections on this stream.
         "min_unlock_seconds": 1.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 4.0,
+
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "STANDING_ZONE": np.array([(1116, 411), (983, 528), (1293, 664), (1569, 607)], np.int32),
@@ -271,7 +271,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 3.5,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 3.0,
+
         "evening_second_unlocker_timeout_seconds": 50.0,
         "rois": {
             "STANDING_ZONE": np.array([[862, 931], [1087, 687], [1217, 728], [1217, 728], [1027, 1013]], np.int32),
@@ -295,7 +295,7 @@ STREAMS_CONFIG = [
         "door_corner_min_visible_ratio": 0.5,
         "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
-        "morning_post_open_auth_seconds": 5.0,
+
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "DOOR_CORNER_ROI": np.array([(2342, 106), (2197, 81), (2082, 24), (2070, 47), (2310, 165)], np.int32),

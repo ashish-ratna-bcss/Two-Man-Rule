@@ -475,9 +475,7 @@ def main(
         _has_max = "max_unlock_seconds" in stream_config
         stream_min_unlock = float(stream_config["min_unlock_seconds"]) if _has_min else float(config.MIN_UNLOCK_SECONDS)
         stream_max_unlock = float(stream_config["max_unlock_seconds"]) if _has_max else float(config.MAX_UNLOCK_SECONDS)
-        stream_morning_post_open_auth = float(
-            stream_config.get("morning_post_open_auth_seconds", config.MORNING_POST_OPEN_AUTH_SECONDS)
-        )
+
         stream_evening_second_unlocker_timeout = float(
             stream_config.get("evening_second_unlocker_timeout_seconds", config.EVENING_SECOND_UNLOCKER_TIMEOUT_SECONDS)
         )
@@ -533,8 +531,7 @@ def main(
         door_transition_pending      = False
         tracking_active              = False
         persons_auth_status          = None
-        morning_post_open_started    = False
-        morning_post_open_start_frame = None
+
         live_window_available        = can_show_live_window(show_live)
 
         if live_window_available:
@@ -913,10 +910,11 @@ def main(
                     evening_auth_started = False
                     print("[EVENING] Dual Auth FAILED: Same person attempted both unlocks.")
                 elif current_auth_window == "morning":
-                    print("[MORNING] Potential SAME_ID violation detected. Waiting for door transition.")
-                    if is_door_open and not morning_post_open_started:
+                    if is_door_open:
                         morning_check_done = True
-                        print("[MORNING] Dual Auth FAILED: Same person (Door open). Exiting.")
+                        print("[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
+                    else:
+                        print("[MORNING] SAME_ID violation detected. Will capture at CLOSED->OPEN transition.")
 
                 state_machine.session["violation_type"] = None
 
@@ -935,73 +933,37 @@ def main(
 
             # ===== MORNING CHECK =====
             if is_morning_window and not morning_check_done:
-                if door_transition == "CLOSED_TO_OPEN" and not morning_post_open_started:
-                    morning_post_open_started    = True
-                    morning_post_open_start_frame = frame_idx
-                    print(
-                        f"[MORNING] CLOSED->OPEN detected at {curr_hour_min} IST. "
-                        f"Starting {stream_morning_post_open_auth:.0f}s post-open auth window."
-                    )
-                    is_auth            = auth_result["authorized"]
-                    both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
-                    if is_auth and both_in_interaction:
-                        persons_auth_status = True
-                        _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
-                            "authorized": True,
-                            "p1_id":      state_machine.session.get("id_a"),
-                            "p2_id":      state_machine.session.get("id_b"),
-                            "transition": "CLOSED_TO_OPEN",
-                            "both_in_interaction_zone": True,
-                            "timing": "immediate",
-                        }, "Morning")
-                        print(f"[MORNING] Authorized CLOSED->OPEN confirmed immediately at {curr_hour_min} IST.")
-                        state_machine.session["door_open_captured"] = True
-                        morning_post_open_started = False
-                        morning_check_done        = True
-
-                if morning_post_open_started:
-                    elapsed            = (frame_idx - morning_post_open_start_frame) / fps
-                    is_auth            = auth_result["authorized"]
+                if door_transition == "CLOSED_TO_OPEN":
+                    is_auth = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
 
                     if is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
                             "authorized": True,
-                            "p1_id":      state_machine.session.get("id_a"),
-                            "p2_id":      state_machine.session.get("id_b"),
+                            "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": True,
                         }, "Morning")
                         print(f"[MORNING] Authorized CLOSED->OPEN confirmed at {curr_hour_min} IST.")
-                        state_machine.session["door_open_captured"] = True
-                        morning_post_open_started = False
-                        morning_check_done        = True
-                    elif elapsed >= stream_morning_post_open_auth:
+                    else:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
-                            "p1_id":      state_machine.session.get("id_a"),
-                            "p2_id":      state_machine.session.get("id_b"),
+                            "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": both_in_interaction,
                             "reason": "missing_dual_auth_or_interaction_zone",
                         }, "Morning")
-                        print(
-                            f"[MORNING] UNAUTHORIZED CLOSED->OPEN "
-                            f"(timeout {elapsed:.1f}s) at {curr_hour_min} IST."
-                        )
-                        state_machine.session["door_open_captured"] = True
-                        morning_post_open_started = False
-                        morning_check_done        = True
-                    else:
-                        rem = stream_morning_post_open_auth - elapsed
-                        visualizer.draw_status_text(
-                            frame, f"MORNING CHECK: CONFIRMING UNLOCKERS ({rem:.1f}s)",
-                            (10, 130), color=(0, 255, 100), bg_color=(0, 50, 20),
-                        )
+                        print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST.")
+
+                    state_machine.session["door_open_captured"] = True
+                    morning_check_done = True
 
                 elif not morning_check_done:
+                    # Idle display while waiting for door transition
                     if door_transition_pending:
                         visualizer.draw_status_text(
                             frame, "STATUS: DOOR STATE STABILIZING...",
