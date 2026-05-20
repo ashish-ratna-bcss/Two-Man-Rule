@@ -468,7 +468,7 @@ class _InferenceServer:
                 self.shm = shared_memory.SharedMemory(name=shm_name)
                 self.shm_slot_size = (
                     getattr(config, "MAX_SHARED_MEMORY_MB", 1024) * 1024 * 1024
-                ) // 100
+                ) // len(getattr(config, "STREAMS_CONFIG", [1] * 10))
                 print(f"[InferenceServer] SharedMemory attached: {shm_name}")
             except Exception as e:
                 print(f"[InferenceServer] ERROR: Could not attach to SharedMemory {shm_name}: {e}")

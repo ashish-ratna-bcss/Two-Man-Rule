@@ -154,11 +154,24 @@ class DualAuthStateMachine:
         interacting_ids: Set[int] = set()
 
 
+        zone_occupied = False
         for track_id, person in tracked_persons.items():
             pose = self._evaluate_unlock_pose(person, track_id)
             pose_results[track_id] = pose
+            
+            # Active (Priority) Trigger:
+            # 1. MUST be standing in STANDING_ZONE
+            # 2. MUST be facing the door (shoulders or general body order must be correct)
+            is_standing = pose.get("feet_in_standing", False)
+            facing_correct = pose.get("shoulder_order_correct", False) or pose.get("left_right_order", False)
+            
+            if is_standing and facing_correct:
+                zone_occupied = True
+                
             if pose["qualified"]:
                 interacting_ids.add(track_id)
+                
+        self.session["zone_occupied"] = zone_occupied
 
         self._apply_occlusion_recovery(tracked_persons, pose_results)
 

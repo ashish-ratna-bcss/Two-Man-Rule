@@ -89,19 +89,23 @@ BATCH_SIZE_LIMIT = 16             # Reduced from 32 — lower latency per batch
 INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
 
 # Priority server: handles active-unlocker streams with a small, fast batch.
-PRIORITY_BATCH_SIZE_LIMIT = 4     # Small batch → fast GPU turnaround for active streams
+# Batches for Priority (active streams).
+# Setting this to 2 smartly balances ultra-low latency while grouping pairs
+# of active streams into a single pass to save GPU overhead.
+PRIORITY_BATCH_SIZE_LIMIT: int = 2     # Small batch → fast GPU turnaround for active streams
 
 GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
-MAX_SHARED_MEMORY_MB = 4096       # Buffer for passing frames between processes (4GB)
 
-# Pre-warm the GPU model on server startup (before first request arrives).
-# Eliminates cold-start latency at window open. Set False only for RAM-constrained hosts.
-GPU_PRELOAD_ON_START = True
+# Dynamically calculate Shared Memory buffer based on configured streams.
+# 20MB per stream provides plenty of headroom for 2688x1520 BGR frames (~12.2MB).
+MAX_SHARED_MEMORY_MB = len(STREAMS_CONFIG) * 20
+# Set to False for 24/7 deployments so it only loads into VRAM at 07:00 and 19:00.
+GPU_PRELOAD_ON_START = False
 
 # ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
 # SCANNING tier: how long a camera worker waits before treating a GPU reply as lost.
 # Set to 3× your p99 latency measured from gpu_server_scan.log.
-INFERENCE_TIMEOUT_SECONDS: float = 2.0
+INFERENCE_TIMEOUT_SECONDS: float = 4.0
 
 # PRIORITY tier: tighter timeout for active-unlocker streams.
 # START at 2.0s (same as scanning) — tune DOWN to p99_priority_ms * 2 / 1000

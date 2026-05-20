@@ -28,6 +28,25 @@ import json
 # Global reference for cleanup in single-stream mode
 detector = None
 
+def _gpu_server_entry(req_q, response_registry, shm_name,
+                      base_log_dir, device, half, is_priority):
+    """Redirect GPU server stdout/stderr to the standard daily logs.
+    Must be at module level for multiprocessing pickle to work."""
+    from models.pose_detector import _InferenceServer
+    from io_.terminal_tee import enable_terminal_capture
+    tier_name = "priority" if is_priority else "scan"
+    restore_logs = enable_terminal_capture(
+        base_dir=base_log_dir,
+        site_name="gpu_servers",
+        camera_id=".",
+        file_prefix=f"gpu_{tier_name}"
+    )
+    try:
+        _srv = _InferenceServer(device=device, half=half)
+        _srv.run(req_q, response_registry, shm_name, is_priority=is_priority)
+    finally:
+        restore_logs()
+
 
 class _NumpySafeEncoder(json.JSONEncoder):
     """Handles numpy scalar types that are not natively JSON serializable."""
@@ -621,6 +640,7 @@ def main(
                 or state_machine.session.get("candidate_b") is not None
                 or state_machine.session.get("id_a") is not None
                 or state_machine.session.get("id_b") is not None
+                or state_machine.session.get("zone_occupied") == True
             )
 
             # Dynamic process_every: run at full rate when an unlocker is being tracked.
@@ -1267,7 +1287,7 @@ if __name__ == "__main__":
 
             shm_config = manager.dict({
                 'name':      shm.name if shm else None,
-                'slot_size': shm_size // 100,
+                'slot_size': shm_size // len(getattr(config, "STREAMS_CONFIG", [1] * 10)),
                 'slot_map':  {},
             })
 
@@ -1279,23 +1299,6 @@ if __name__ == "__main__":
             threading.Thread(target=manager_server.serve_forever, daemon=True).start()
 
             gpu_log_dir = getattr(config, "BASE_LOG_DIR", ".")
-
-            def _gpu_server_entry(req_q, response_registry, shm_name,
-                                  base_log_dir, device, half, is_priority):
-                """Redirect GPU server stdout/stderr to the standard daily logs."""
-                from io_.terminal_tee import enable_terminal_capture
-                tier_name = "priority" if is_priority else "scan"
-                restore_logs = enable_terminal_capture(
-                    base_dir=base_log_dir,
-                    site_name="gpu_servers",
-                    camera_id=".",
-                    file_prefix=f"gpu_{tier_name}"
-                )
-                try:
-                    _srv = _InferenceServer(device=device, half=half)
-                    _srv.run(req_q, response_registry, shm_name, is_priority=is_priority)
-                finally:
-                    restore_logs()
 
             shm_name = shm.name if shm else None
 
@@ -1369,7 +1372,10 @@ if __name__ == "__main__":
                         _proc.join(timeout=2)
                 if 'shm' in locals() and shm:
                     shm.close()
-                    shm.unlink()
+                    try:
+                        shm.unlink()
+                    except FileNotFoundError:
+                        pass
         sys.exit(0)
 
     # ---- Single stream path ----
