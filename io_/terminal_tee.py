@@ -11,10 +11,11 @@ IST = timezone(timedelta(hours=5, minutes=30))
 class _DailyRunLogSink:
     """Write plain-text terminal output into per-run files with midnight rollover."""
 
-    def __init__(self, base_dir: str, site_name: str, camera_id: str):
+    def __init__(self, base_dir: str, site_name: str, camera_id: str, file_prefix: str = "run"):
         self.base_dir = base_dir
         self.site_name = str(site_name)
         self.camera_id = str(camera_id)
+        self.file_prefix = file_prefix
         self._active_date = ""
         self._fh = None
         self._path = ""
@@ -44,7 +45,7 @@ class _DailyRunLogSink:
 
         target_dir = os.path.join(self.base_dir, self.site_name, self.camera_id, date_str)
         os.makedirs(target_dir, exist_ok=True)
-        filename = f"run_{self._time_str(now_ist)}.log"
+        filename = f"{self.file_prefix}_{self._time_str(now_ist)}.log"
         self._path = os.path.join(target_dir, filename)
         self._fh = open(self._path, "a", encoding="utf-8")
         self._active_date = date_str
@@ -98,12 +99,12 @@ class _TeeTextStream:
         return self._original.fileno()
 
 
-def enable_terminal_capture(base_dir: str, site_name: str, camera_id: str):
-    """Mirror sys.stdout/sys.stderr to logs/{site}/{camera}/{date}/run_*.log.
+def enable_terminal_capture(base_dir: str, site_name: str, camera_id: str, file_prefix: str = "run"):
+    """Mirror sys.stdout/sys.stderr to logs/{site}/{camera}/{date}/{prefix}_*.log.
 
     Returns a zero-arg restore function.
     """
-    sink = _DailyRunLogSink(base_dir=base_dir, site_name=site_name, camera_id=camera_id)
+    sink = _DailyRunLogSink(base_dir=base_dir, site_name=site_name, camera_id=camera_id, file_prefix=file_prefix)
     original_stdout = sys.stdout
     original_stderr = sys.stderr
 

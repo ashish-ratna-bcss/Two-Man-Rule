@@ -396,8 +396,8 @@ def main(
 
     detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
     if shared_inference:
-        req_q, res_registry, shm_config = get_shared_queues()
-        if req_q is not None and res_registry is not None:
+        scan_q, priority_q, res_registry, pri_registry, shm_config = get_shared_queues()
+        if scan_q is not None and res_registry is not None:
             # Inject assigned SHM slot into registry slot_map if provided via CLI
             if shm_config and 'shm_slot' in stream_config:
                 slot_map = dict(shm_config.get('slot_map', {}))
@@ -405,7 +405,7 @@ def main(
                 shm_config['slot_map'] = slot_map
 
             # set_queues creates the private response queue and registers it
-            detector.set_queues(req_q, res_registry, shm_config=shm_config)
+            detector.set_queues(scan_q, priority_q, res_registry, pri_registry, shm_config=shm_config)
         else:
             print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
             detector.shared_mode = False
@@ -575,7 +575,7 @@ def main(
                 is_evening_window = (test_window == "evening")
             else:
                 is_morning_window = "07:00" <= curr_hour_min <= "11:00"
-                is_evening_window = "20:00" <= curr_hour_min <= "23:00"
+                is_evening_window = "19:00" <= curr_hour_min <= "23:00"
 
             current_auth_window = None
             if is_morning_window and not morning_check_done:
@@ -612,9 +612,28 @@ def main(
             )
 
             # ===== PIPELINE =====
+            # FSM activity signal — computed locally from this stream's own session state.
+            # True when candidate_a/b or verified id_a/b is set (unlocker interaction active).
+            # This is passed to detector.detect() so it can self-route to the priority
+            # inference queue for faster GPU turnaround during the critical auth window.
+            _fsm_active = tracking_active and (
+                state_machine.session.get("candidate_a") is not None
+                or state_machine.session.get("candidate_b") is not None
+                or state_machine.session.get("id_a") is not None
+                or state_machine.session.get("id_b") is not None
+            )
+
+            # Dynamic process_every: run at full rate when an unlocker is being tracked.
+            # Falls back to CLI-specified process_every for idle/scanning streams.
+            _effective_process_every = (
+                1
+                if (_fsm_active and shared_inference)
+                else process_every
+            )
+
             should_process_frame = (
                 frame_idx == 1
-                or (frame_idx - last_processed_frame_idx) >= process_every
+                or (frame_idx - last_processed_frame_idx) >= _effective_process_every
             )
 
             if should_process_frame:
@@ -624,7 +643,7 @@ def main(
                 t0 = time.perf_counter()
 
                 if tracking_active:
-                    raw_detections = detector.detect(frame)
+                    raw_detections = detector.detect(frame, fsm_is_active=_fsm_active)
 
                     # ----------------------------------------------------------
                     # Inference result handling — three distinct outcomes:
@@ -1229,7 +1248,7 @@ if __name__ == "__main__":
 
         if args.shared_inference:
             base_cmd.append("--shared-inference")
-            print("[SYSTEM] Shared Inference mode enabled. Initialising GPU Master...")
+            print("[SYSTEM] Shared Inference mode enabled. Initialising GPU Masters...")
 
             from multiprocessing.shared_memory import SharedMemory
             shm_size = getattr(config, "MAX_SHARED_MEMORY_MB", 2048) * 1024 * 1024
@@ -1240,14 +1259,11 @@ if __name__ == "__main__":
                 print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to queue copy.")
                 shm = None
 
-            # ------------------------------------
-            # NEW: response_registry replaces single shared response_queue.
-            # It is a Manager dict {client_id -> mp.Queue} that the GPU server
-            # uses to route results directly to the requesting worker.
-            # ------------------------------------
-            manager          = mp.Manager()
-            req_q            = manager.Queue()
-            response_registry = manager.dict()   # {client_id: mp.Queue}  ← NEW
+            manager           = mp.Manager()
+            req_q_scan        = manager.Queue()   # Scanning tier: idle/background streams
+            req_q_priority    = manager.Queue()   # Priority tier: active unlocker streams
+            response_registry = manager.dict()    # {client_id: private mp.Queue}
+            priority_registry = manager.dict()    # {client_id: "SCANNING"|"ACTIVE"} (observability)
 
             shm_config = manager.dict({
                 'name':      shm.name if shm else None,
@@ -1255,18 +1271,58 @@ if __name__ == "__main__":
                 'slot_map':  {},
             })
 
-            manager_server = start_inference_manager(req_q, response_registry, shm_config)
+            manager_server = start_inference_manager(
+                req_q_scan, req_q_priority,
+                response_registry, priority_registry,
+                shm_config,
+            )
             threading.Thread(target=manager_server.serve_forever, daemon=True).start()
 
-            gpu_server  = _InferenceServer(device=args.device, half=not args.no_half)
-            server_proc = mp.Process(
-                target=gpu_server.run,
-                args=(req_q, response_registry, shm.name if shm else None),
+            gpu_log_dir = getattr(config, "BASE_LOG_DIR", ".")
+
+            def _gpu_server_entry(req_q, response_registry, shm_name,
+                                  base_log_dir, device, half, is_priority):
+                """Redirect GPU server stdout/stderr to the standard daily logs."""
+                from io_.terminal_tee import enable_terminal_capture
+                tier_name = "priority" if is_priority else "scan"
+                restore_logs = enable_terminal_capture(
+                    base_dir=base_log_dir,
+                    site_name="gpu_servers",
+                    camera_id=".",
+                    file_prefix=f"gpu_{tier_name}"
+                )
+                try:
+                    _srv = _InferenceServer(device=device, half=half)
+                    _srv.run(req_q, response_registry, shm_name, is_priority=is_priority)
+                finally:
+                    restore_logs()
+
+            shm_name = shm.name if shm else None
+
+            # SCANNING server — handles all idle/background streams
+            scanning_proc = mp.Process(
+                target=_gpu_server_entry,
+                args=(req_q_scan, response_registry, shm_name,
+                      gpu_log_dir, args.device, not args.no_half, False),
                 daemon=True,
             )
-            server_proc.start()
+            scanning_proc.start()
+            print(f"[SYSTEM] GPU SCANNING server active (PID: {scanning_proc.pid}). "
+                  f"Logs in: {os.path.join(gpu_log_dir, 'gpu_master', 'scan')}")
+
+            # PRIORITY server — handles active-unlocker streams
+            priority_proc = mp.Process(
+                target=_gpu_server_entry,
+                args=(req_q_priority, response_registry, shm_name,
+                      gpu_log_dir, args.device, not args.no_half, True),
+                daemon=True,
+            )
+            priority_proc.start()
+            print(f"[SYSTEM] GPU PRIORITY server active (PID: {priority_proc.pid}). "
+                  f"Logs in: {os.path.join(gpu_log_dir, 'gpu_master', 'priority')}")
+
             print(
-                f"[SYSTEM] GPU Master active (PID: {server_proc.pid}). "
+                f"[SYSTEM] Dual GPU Masters active. "
                 f"Per-client routing enabled for {len(selected_stream_indexes)} streams."
             )
 
@@ -1304,10 +1360,13 @@ if __name__ == "__main__":
                     p.wait(timeout=3)
                 except subprocess.TimeoutExpired:
                     p.kill()
-            if args.shared_inference and 'server_proc' in locals():
-                print("[SYSTEM] Shutting down GPU Master...")
-                server_proc.terminate()
-                server_proc.join(timeout=2)
+            if args.shared_inference:
+                print("[SYSTEM] Shutting down GPU Masters...")
+                for _proc_name, _proc in [("scanning", locals().get("scanning_proc")),
+                                          ("priority",  locals().get("priority_proc"))]:
+                    if _proc is not None:
+                        _proc.terminate()
+                        _proc.join(timeout=2)
                 if 'shm' in locals() and shm:
                     shm.close()
                     shm.unlink()

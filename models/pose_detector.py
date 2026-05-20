@@ -35,36 +35,46 @@ def get_shared_queues(address=('127.0.0.1', 50000), authkey=b'pmj_auth'):
     """Connect to a running InferenceManager and return the shared objects.
 
     Returns:
-        (request_queue, response_registry, shm_config)
-        response_registry is a Manager dict: {client_id -> mp.Queue}
+        (scan_req_q, priority_req_q, response_registry, priority_registry, shm_config)
+        response_registry: Manager dict {client_id -> mp.Queue}  (routing)
+        priority_registry: Manager dict {client_id -> str}        (observability)
     """
-    InferenceManager.register('get_request_queue')
+    InferenceManager.register('get_scan_queue')
+    InferenceManager.register('get_priority_queue')
     InferenceManager.register('get_response_registry', proxytype=DictProxy)
+    InferenceManager.register('get_priority_registry', proxytype=DictProxy)
     InferenceManager.register('get_shared_memory_config', proxytype=DictProxy)
     manager = InferenceManager(address=address, authkey=authkey)
     try:
         manager.connect()
         return (
-            manager.get_request_queue(),
+            manager.get_scan_queue(),
+            manager.get_priority_queue(),
             manager.get_response_registry(),
+            manager.get_priority_registry(),
             manager.get_shared_memory_config(),
         )
     except Exception as e:
         print(f"[InferenceManager] Could not connect to shared server: {e}")
-        return None, None, None
+        return None, None, None, None, None
 
 
 def start_inference_manager(
-    request_q,
+    scan_req_q,
+    priority_req_q,
     response_registry,
+    priority_registry,
     shm_config,
     address=('127.0.0.1', 50000),
     authkey=b'pmj_auth',
 ):
-    """Start a manager server hosting the request queue, response registry and shm config."""
-    InferenceManager.register('get_request_queue',      callable=lambda: request_q)
-    InferenceManager.register('get_response_registry',  callable=lambda: response_registry, proxytype=DictProxy)
-    InferenceManager.register('get_shared_memory_config', callable=lambda: shm_config,       proxytype=DictProxy)
+    """Start a manager server hosting both request queues, response registry,
+    priority registry and shm config."""
+    InferenceManager.register('get_scan_queue',          callable=lambda: scan_req_q)
+    InferenceManager.register('get_priority_queue',      callable=lambda: priority_req_q)
+    InferenceManager.register('get_response_registry',   callable=lambda: response_registry,  proxytype=DictProxy)
+    InferenceManager.register('get_priority_registry',   callable=lambda: priority_registry,  proxytype=DictProxy)
+    InferenceManager.register('get_shared_memory_config',callable=lambda: shm_config,          proxytype=DictProxy)
     manager = InferenceManager(address=address, authkey=authkey)
     server = manager.get_server()
     return server
@@ -98,10 +108,15 @@ class PoseDetector:
         self._request_queue = None
         self._response_queue: Optional[mp.Queue] = None   # OUR private queue
         self._response_registry = None                     # Manager DictProxy
+        self._priority_registry  = None                     # observability dict
         self._shm = None
         self._shm_buf = None
         self._shm_slot_idx = -1
         self._shm_slot_size = 0
+
+        # Dual request queues — workers self-route based on FSM state
+        self._scanning_request_queue = None   # Low-priority: idle/background streams
+        self._priority_request_queue = None   # High-priority: active unlocker streams
 
         if not self.shared_mode:
             print(f"[PoseDetector] Initialized in STANDALONE mode (Lazy Load enabled)")
@@ -156,10 +171,16 @@ class PoseDetector:
     # Public inference entry point
     # ------------------------------------------------------------------
 
-    def detect(self, frame: np.ndarray) -> List[Dict]:
-        """Run pose detection — shared mode or standalone."""
+    def detect(self, frame: np.ndarray, fsm_is_active: bool = False) -> List[Dict]:
+        """Run pose detection — shared mode or standalone.
+
+        fsm_is_active: True when candidate_a, candidate_b, id_a, or id_b is set
+        in the state machine session (i.e., an unlocker interaction is in progress).
+        In shared mode this routes the request to the dedicated priority queue so
+        the active stream gets faster GPU turnaround than idle scanning streams.
+        """
         if self.shared_mode:
-            return self._detect_shared(frame)
+            return self._detect_shared(frame, fsm_is_active=fsm_is_active)
 
         self._ensure_model_loaded()
         try:
@@ -190,23 +211,42 @@ class PoseDetector:
     # Shared-mode inference — per-client response queue (NEW)
     # ------------------------------------------------------------------
 
-    def _detect_shared(self, frame: np.ndarray) -> List[Dict]:
+    def _detect_shared(self, frame: np.ndarray, fsm_is_active: bool = False) -> List[Dict]:
         """Submit a frame to the GPU server and wait on OUR private response queue.
 
-        Key design change vs. the old architecture:
-          OLD: one shared response_queue polled by all workers → O(N²) re-queue churn,
-               5-second timeouts exhausted re-queuing other cameras' results.
-          NEW: each worker has its own mp.Queue registered in response_registry.
-               The GPU server looks up client_id → queue and puts the result there
-               directly.  No polling of foreign results, no re-queuing, O(1) delivery.
+        Self-routing design:
+          idle stream  (fsm_is_active=False) → scanning request queue
+                                                (batch=16, lower priority)
+          active stream (fsm_is_active=True)  → priority request queue
+                                                (batch=4, fast GPU turnaround)
+
+        Workers decide routing locally from their own FSM state — no cross-process
+        calls needed. The supervisor cannot reach into child process objects.
         """
-        if self._request_queue is None or self._response_queue is None:
+        # Pick the correct request queue based on current FSM activity.
+        # Fall back to scanning queue if priority queue isn't wired yet.
+        req_q = (
+            self._priority_request_queue
+            if (fsm_is_active and self._priority_request_queue is not None)
+            else self._scanning_request_queue
+        )
+
+        if req_q is None or self._response_queue is None:
             print(
                 "[PoseDetector] WARNING: Shared mode queues not initialised. "
                 "Falling back to standalone."
             )
             self.shared_mode = False
             return self.detect(frame)
+
+        # Observability: write current tier to priority_registry (best-effort, non-fatal)
+        if self._priority_registry is not None:
+            try:
+                self._priority_registry[self.client_id] = (
+                    "ACTIVE" if fsm_is_active else "SCANNING"
+                )
+            except Exception:
+                pass
 
         try:
             # Build request payload (SHM fast-path or queue copy)
@@ -217,10 +257,10 @@ class PoseDetector:
                         f"[PoseDetector] Frame too large for SHM slot "
                         f"({frame.nbytes} > {self._shm_slot_size}); using queue copy."
                     )
-                    self._request_queue.put((self.client_id, frame))
+                    req_q.put((self.client_id, frame))
                 else:
                     self._shm_buf[offset : offset + frame.nbytes] = frame.tobytes()
-                    self._request_queue.put((
+                    req_q.put((
                         self.client_id,
                         {
                             "shm_slot": self._shm_slot_idx,
@@ -230,24 +270,28 @@ class PoseDetector:
                         },
                     ))
             else:
-                self._request_queue.put((self.client_id, frame))
+                req_q.put((self.client_id, frame))
 
-            # Wait on OUR dedicated queue — no other worker will ever touch it.
-            # Timeout is 3× the expected p99 inference latency.  On timeout we
-            # return a sentinel None so the caller's FSM can distinguish
-            # "inference unavailable" from "no detections".
-            timeout_s = getattr(config, "INFERENCE_TIMEOUT_SECONDS", 2.0)
+            # Tier-appropriate timeout:
+            #   Priority streams get a tighter deadline — measured p99 * 2.
+            #   Scanning streams keep the safe 2.0s default.
+            # Both default to INFERENCE_TIMEOUT_SECONDS until GPU latency is confirmed.
+            timeout_s = (
+                getattr(config, "PRIORITY_INFERENCE_TIMEOUT_SECONDS",
+                        getattr(config, "INFERENCE_TIMEOUT_SECONDS", 2.0))
+                if fsm_is_active
+                else getattr(config, "INFERENCE_TIMEOUT_SECONDS", 2.0)
+            )
             try:
                 result = self._response_queue.get(timeout=timeout_s)
                 return result
             except Exception:
-                # Queue.Empty — genuine inference timeout, not a routing failure.
+                tier = "PRIORITY" if fsm_is_active else "SCANNING"
                 print(
-                    f"[PoseDetector] Inference timeout ({timeout_s}s) for {self.client_id}. "
-                    f"Returning INFERENCE_TIMEOUT sentinel."
+                    f"[PoseDetector] {tier} inference timeout ({timeout_s}s) "
+                    f"for {self.client_id}. Returning INFERENCE_TIMEOUT sentinel."
                 )
-                # Return the sentinel so the FSM can hold state rather than wipe it.
-                return None   # Callers must handle None → use LKG / hold FSM state
+                return None   # Callers handle None → use LKG / hold FSM state
 
         except Exception as e:
             print(f"[PoseDetector] Shared inference error: {e}")
@@ -259,14 +303,21 @@ class PoseDetector:
 
     def set_queues(
         self,
-        request_q,
+        scan_req_q,
+        priority_req_q,
         response_registry,       # SyncManager DictProxy {client_id -> manager.Queue proxy}
+        priority_registry=None,  # SyncManager DictProxy {client_id -> "SCANNING"|"ACTIVE"}
         shm_config=None,
     ):
         """Wire up the per-client queues and shared memory.
 
         Creates a private managed Queue for this client and registers it in
         response_registry so the GPU server can route replies to it directly.
+
+        Dual-queue routing:
+          scan_req_q     — submitted when fsm_is_active=False (idle/background streams)
+          priority_req_q — submitted when fsm_is_active=True  (active unlocker streams)
+        Workers self-route each frame based on their own local FSM state.
 
         IMPORTANT — mp.Queue() vs manager.Queue():
           Plain mp.Queue() objects cannot be stored in a Manager DictProxy.
@@ -278,8 +329,13 @@ class PoseDetector:
           We need the manager reference, so set_queues() accepts it as a
           parameter injected by main.py's setup block.
         """
-        self._request_queue = request_q
-        self._response_registry = response_registry
+        self._scanning_request_queue = scan_req_q
+        self._priority_request_queue = priority_req_q
+        self._response_registry      = response_registry
+        self._priority_registry      = priority_registry
+
+        # Keep _request_queue as alias of scanning queue for any legacy code paths
+        self._request_queue = scan_req_q
 
         # response_registry._manager is the SyncManager instance created in
         # main.py.  We call .Queue() on it to get a properly managed proxy
@@ -289,7 +345,9 @@ class PoseDetector:
         self._response_queue = manager.Queue(maxsize=4)
         response_registry[self.client_id] = self._response_queue
         print(
-            f"[PoseDetector] Registered per-client response queue for {self.client_id}"
+            f"[PoseDetector] Registered per-client response queue for {self.client_id} "
+            f"(scan_q={'OK' if scan_req_q else 'MISSING'}, "
+            f"priority_q={'OK' if priority_req_q else 'MISSING'})"
         )
 
         if shm_config and shm_config.get('name'):
@@ -390,6 +448,7 @@ class _InferenceServer:
         request_queue: mp.Queue,
         response_registry,          # Manager DictProxy {client_id -> mp.Queue}
         shm_name: str = None,
+        is_priority: bool = False,  # True = priority server (small batch, fast)
     ):
         """Main inference loop.
 
@@ -399,8 +458,10 @@ class _InferenceServer:
         If a worker has already disconnected and removed its queue from the
         registry, the result is silently dropped (worker is gone anyway).
         """
-        self.running = True
-        print("[InferenceServer] GPU server process started (per-client routing).")
+        self.running    = True
+        self.is_priority = is_priority
+        tier_label = "PRIORITY" if is_priority else "SCANNING"
+        print(f"[InferenceServer] GPU server process started ({tier_label} tier, per-client routing).")
 
         if shm_name:
             try:
@@ -411,6 +472,18 @@ class _InferenceServer:
                 print(f"[InferenceServer] SharedMemory attached: {shm_name}")
             except Exception as e:
                 print(f"[InferenceServer] ERROR: Could not attach to SharedMemory {shm_name}: {e}")
+
+        # Pre-warm model before first request if configured.
+        # Eliminates cold-start latency spike at window open.
+        if getattr(config, "GPU_PRELOAD_ON_START", False):
+            self._load_model()
+
+        batch_limit = (
+            getattr(config, "PRIORITY_BATCH_SIZE_LIMIT", 4)
+            if is_priority
+            else getattr(config, "BATCH_SIZE_LIMIT", 16)
+        )
+        print(f"[InferenceServer] {tier_label} tier ready. Batch limit: {batch_limit}.")
 
         while self.running:
             # ---- Collect first request (blocking with idle timeout) ----
@@ -425,7 +498,8 @@ class _InferenceServer:
                     idle_s = time.time() - self.last_active
                     gpu_idle_timeout = getattr(config, "GPU_IDLE_TIMEOUT", 300)
                     if idle_s > gpu_idle_timeout:
-                        print(f"[InferenceServer] Idle {idle_s:.0f}s — unloading model.")
+                        tier_label = "PRIORITY" if self.is_priority else "SCANNING"
+                        print(f"[InferenceServer] {tier_label} idle {idle_s:.0f}s — unloading model.")
                         self.model = None
                         torch.cuda.empty_cache()
                 continue
@@ -434,7 +508,7 @@ class _InferenceServer:
                 self._load_model()
 
             # ---- Drain additional requests up to batch limit ----
-            batch_limit = getattr(config, "BATCH_SIZE_LIMIT", 32)
+            # batch_limit set per-tier in run() based on is_priority flag
             wait_ms     = getattr(config, "INFERENCE_BATCH_WAIT_MS", 5)
             wait_start  = time.perf_counter()
 

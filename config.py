@@ -83,17 +83,31 @@ MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 # ============ SHARED INFERENCE & SCALING ============
 # When True, multiple streams share a single YOLO instance to save VRAM.
 SHARED_INFERENCE_ENABLED = True   # Enabled by default for high-density scalability
-BATCH_SIZE_LIMIT = 32             # Max frames to process in one GPU call
+
+# Scanning server: handles all idle/background streams in a larger batch.
+BATCH_SIZE_LIMIT = 16             # Reduced from 32 — lower latency per batch
 INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
+
+# Priority server: handles active-unlocker streams with a small, fast batch.
+PRIORITY_BATCH_SIZE_LIMIT = 4     # Small batch → fast GPU turnaround for active streams
+
 GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
 MAX_SHARED_MEMORY_MB = 4096       # Buffer for passing frames between processes (4GB)
 
+# Pre-warm the GPU model on server startup (before first request arrives).
+# Eliminates cold-start latency at window open. Set False only for RAM-constrained hosts.
+GPU_PRELOAD_ON_START = True
+
 # ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
-# How long (seconds) a camera worker waits on its private response queue before
-# treating a GPU reply as lost.  Set to 3× your p99 inference latency.
-# At batch_size=8, process_every=3, 15fps → inference ~40-80ms → 0.5s is ample.
-# Keep at 2.0s initially; tune down once you confirm GPU health.
+# SCANNING tier: how long a camera worker waits before treating a GPU reply as lost.
+# Set to 3× your p99 latency measured from gpu_server_scan.log.
 INFERENCE_TIMEOUT_SECONDS: float = 2.0
+
+# PRIORITY tier: tighter timeout for active-unlocker streams.
+# START at 2.0s (same as scanning) — tune DOWN to p99_priority_ms * 2 / 1000
+# once gpu_server_priority.log confirms real GPU latency.
+# Example: if priority p99 = 80ms → set to 0.16s
+PRIORITY_INFERENCE_TIMEOUT_SECONDS: float = 2.0
 
 # How many consecutive inference timeouts to tolerate before the tracker stops
 # coasting on LKG and starts using empty detections (track ageing).
