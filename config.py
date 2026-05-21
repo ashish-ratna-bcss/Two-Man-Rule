@@ -170,6 +170,157 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
             "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
         }
+    },
+    # Stream 2
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
+        "camera_id": "GF-2-CAM-21",
+        "site_id": "2",
+        "site_name": "jubilee_hills",
+        "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
+            "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[488, 113], [493, 172], [609, 72]], np.int32),
+            "STANDING_ZONE": np.array([[688, 1178], [1227, 918], [1420, 1118], [929, 1416]], np.int32),
+            "INTERACTION_ZONE": np.array([[6, 11], [2615, 0], [1927, 1511], [25, 1508]], np.int32)
+        }
+    },
+    # Stream 3
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.76.17:8001/Streaming/Channels/2001",
+        "camera_id": "GF-4-CAM-20",
+        "site_id": "4",
+        "site_name": "vijayawada",
+        "closed_door_reference": "close_doors/closed_GF-4-CAM-20.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 5,
+        "intensity_threshold": 10,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.3,
+        "min_unlock_seconds": 1.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(822, 792), (958, 989), (1423, 735), (1264, 570)], np.int32),
+            "DOOR_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
+            "LOCKS_ROI": np.array([(708, 31), (1217, 31), (1224, 425), (507, 478)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(662, 4), (780, 753), (1333, 501), (1319, 0)], np.int32),
+            "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
+        }
+    },
+    # Stream 4
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.37.109:8001/Streaming/Channels/2501",
+        "camera_id": "GF-5-CAM-25",
+        "site_id": "5",
+        "site_name": "jayanagar",
+        "closed_door_reference": "close_doors/closed_GF-5-CAM-25.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 8,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 4.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([(803, 2), (908, 1), (798, 37)], np.int32),
+            "DOOR_ROI": np.array([(581, 3), (1187, 0), (1034, 742), (471, 797)], np.int32),
+            "LOCKS_ROI": np.array([(526, 81), (1144, 49), (1106, 557), (501, 588)], np.int32),
+            "STANDING_ZONE": np.array([(545, 897), (544, 1103), (1165, 1050), (1154, 853)], np.int32),
+            "INTERACTION_ZONE": np.array([(0, 8), (0, 1340), (1902, 1416), (2076, 11)], np.int32)
+        }
+    },
+    # Stream 5
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.103:8002/Streaming/Channels/2101",
+        "camera_id": "FF-3-CAM-21",
+        "site_id": "3",
+        "site_name": "vizag",
+        "closed_door_reference": "close_doors/closed_FF-3-CAM-21.jpg",
+        "ssim_threshold": 0.70,
+        "debounce_threshold": 7,
+        "intensity_threshold": 12,
+        "motion_threshold": 5.0,
+        "door_corner_min_visible_ratio": 0.3,
+        # NOTE: min_unlock_seconds was 0.2 (200ms) — almost certainly a calibration
+        # accident.  At process_every=3 and 15fps that is ~3 frames: one inference
+        # cycle.  The camera had 160 inference timeouts and zero authorized captures
+        # in the incident logs.  Raised to 1.5s (a conservative minimum) so the
+        # timer has time to accumulate across multiple successful inference cycles.
+        # Re-tune upward (2.5–3.0s recommended) once the queue fix is deployed
+        # and you can confirm clean detections on this stream.
+        "min_unlock_seconds": 1.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(1116, 411), (983, 528), (1293, 664), (1569, 607)], np.int32),
+            "LOCKS_ROI": np.array([(955, 2), (1046, 251), (1523, 192), (1523, 192), (1537, 2)], np.int32),
+            "DOOR_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
+            "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
+        }
+    },
+    # Stream 6
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.97.83:8001/Streaming/Channels/1801",
+        "camera_id": "GF-6-CAM-18",
+        "site_id": "6",
+        "site_name": "himayatnagar",
+        "closed_door_reference": "close_doors/closed_GF-6-CAM-18.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 3.5,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "STANDING_ZONE": np.array([[862, 931], [1087, 687], [1217, 728], [1217, 728], [1027, 1013]], np.int32),
+            "LOCKS_ROI": np.array([(659, 284), (1065, 107), (1141, 642), (799, 861)], np.int32),
+            "DOOR_ROI": np.array([[571, 5], [761, 969], [1116, 620], [1040, 0]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[591, 16], [613, 38], [811, 41], [814, 4]], np.int32),
+            "INTERACTION_ZONE": np.array([[0, 8], [10, 1511], [2679, 1511], [2688, 24]], np.int32)
+        }
+    },
+    # Stream 7
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.106.41:8001/Streaming/Channels/2901",
+        "camera_id": "GF-10-CAM-29",
+        "site_id": "10",
+        "site_name": "kompally",
+        "closed_door_reference": "close_doors/closed_GF-10-CAM-29.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 4.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([(2342, 106), (2197, 81), (2082, 24), (2070, 47), (2310, 165)], np.int32),
+            "LOCKS_ROI": np.array([(1717, 106), (1608, 393), (2131, 631), (2240, 294)], np.int32),
+            "STANDING_ZONE": np.array([[1587, 576], [2035, 815], [1947, 980], [1480, 716]], np.int32),
+            "DOOR_ROI": np.array([[1750, 5], [1563, 550], [2095, 801], [2460, 5]], np.int32),
+            "INTERACTION_ZONE": np.array([[0, 5], [3, 224], [1369, 1520], [2685, 1511], [2688, 5]], np.int32)
+        }
     }
 ]
 
