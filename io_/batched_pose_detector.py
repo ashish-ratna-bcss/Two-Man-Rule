@@ -89,8 +89,8 @@ class BatchedPoseDetector:
         # Retrieve results (blocking, with timeout)
         results = self._coordinator.get_results(self.stream_id, timeout=2.0)
         if results is None:
-            # Timeout or error
-            return []
+            # Timeout — return None so main.py LKG path activates (matches PoseDetector contract)
+            return None
 
         self.last_results = results
         return results

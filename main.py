@@ -383,59 +383,22 @@ def can_show_live_window(show_live: bool) -> bool:
     return True
 
 
-def _clone_snapshot_value(value):
-    if isinstance(value, np.ndarray):
-        return value.copy()
-    if isinstance(value, dict):
-        return {k: _clone_snapshot_value(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_clone_snapshot_value(v) for v in value]
-    if isinstance(value, tuple):
-        return tuple(_clone_snapshot_value(v) for v in value)
-    return value
+def _seconds_until_next_window() -> float:
+    """Return seconds until the next morning (07:00) or evening (19:00) window begins."""
+    now = datetime.now(IST)
+    curr_min = now.hour * 60 + now.minute
+    morning_start_min = 7 * 60   # 07:00
+    evening_start_min = 19 * 60  # 19:00
 
+    if curr_min < morning_start_min:
+        target = now.replace(hour=7, minute=0, second=0, microsecond=0)
+    elif curr_min < evening_start_min:
+        target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+    else:
+        tomorrow = now + timedelta(days=1)
+        target = tomorrow.replace(hour=7, minute=0, second=0, microsecond=0)
 
-def _snapshot_score(unlocker_labels: dict, tracked_persons: dict, auth_result: dict) -> int:
-    tracked_persons = tracked_persons or {}
-    unlocker_labels = unlocker_labels or {}
-    auth_result = auth_result or {}
-
-    visible_unlockers = sum(1 for tid in unlocker_labels if tid in tracked_persons)
-    score = min(len(tracked_persons), 6) * 10
-    score += visible_unlockers * 100
-    if auth_result.get("lock_a_authorized"):
-        score += 250
-    if auth_result.get("lock_b_authorized"):
-        score += 250
-    if auth_result.get("authorized"):
-        score += 500
-    return score
-
-
-def build_alert_snapshot(
-    clean_frame: np.ndarray,
-    unlocker_labels: dict,
-    tracked_persons: dict,
-    auth_result: dict,
-    is_door_open: bool,
-    persons_auth_status,
-    frame_idx: int,
-    reason: str,
-):
-    score = _snapshot_score(unlocker_labels, tracked_persons, auth_result)
-    if score <= 0:
-        return None
-    return {
-        "clean_frame": clean_frame.copy(),
-        "unlocker_labels": dict(unlocker_labels or {}),
-        "tracked_persons": _clone_snapshot_value(tracked_persons or {}),
-        "auth_result": dict(auth_result or {}),
-        "is_door_open": bool(is_door_open),
-        "persons_auth_status": persons_auth_status,
-        "frame_idx": frame_idx,
-        "reason": reason,
-        "score": score,
-    }
+    return max(0.0, (target - now).total_seconds())
 
 
 def capture(
@@ -568,15 +531,16 @@ def main(
         },
     )
 
-    # Choose detection backend: batch scheduler or standalone
-    batch_enabled = getattr(config, "BATCH_SCHEDULER_ENABLED", False)
-    if batch_enabled:
+    # Each stream runs in its own subprocess — direct synchronous inference, no queue, no latency.
+    # BatchedPoseDetector/GPUBatchCoordinator are only relevant for legacy multi-stream
+    # single-process mode (shared_inference=True).
+    if shared_inference:
         from io_.batched_pose_detector import BatchedPoseDetector
         detector = BatchedPoseDetector(device=device, half=half, stream_id=cam_id)
         print(f"[SYSTEM] Using BATCH SCHEDULER mode for {cam_id}.")
     else:
         detector = PoseDetector(device=device, half=half)
-        print(f"[SYSTEM] Using STANDALONE GPU mode for {cam_id}.")
+        print(f"[SYSTEM] Using DIRECT INFERENCE mode for {cam_id}.")
 
     tracker      = PersonTracker()
     roi_manager  = ROIManager()
@@ -599,6 +563,24 @@ def main(
 
         active_rois = setup_rois(roi_manager, stream_config["rois"], width, height, scale_rois=scale_rois)
         print_roi_coordinates(active_rois, width, height, scale_rois)
+
+        # Presence-detection ROI: bounding box of INTERACTION_ZONE (fallback: full frame)
+        _iz = active_rois.get("INTERACTION_ZONE")
+        if _iz is not None and len(_iz) >= 2:
+            _px1 = max(0, int(_iz[:, 0].min()))
+            _py1 = max(0, int(_iz[:, 1].min()))
+            _px2 = min(width,  max(_px1 + 1, int(_iz[:, 0].max())))
+            _py2 = min(height, max(_py1 + 1, int(_iz[:, 1].max())))
+        else:
+            _px1, _py1, _px2, _py2 = 0, 0, width, height
+        presence_roi_bbox = (_px1, _py1, _px2, _py2)
+
+        # Background subtractor for cheap morning presence detection (CPU, <1ms/frame)
+        presence_bg = cv2.createBackgroundSubtractorMOG2(
+            history=300, varThreshold=40, detectShadows=False
+        )
+        PRESENCE_WARMUP_FRAMES   = max(1, int(getattr(config, "PRESENCE_WARMUP_SECONDS", 4.0) * fps))
+        PRESENCE_PIXEL_THRESHOLD = int(getattr(config, "PRESENCE_PIXEL_THRESHOLD", 2500))
 
         try:
             stream_ssim_thresh      = float(stream_config.get("ssim_threshold", config.SSIM_THRESHOLD))
@@ -698,8 +680,9 @@ def main(
         intensity_diff               = None
         door_transition_pending      = False
         tracking_active              = False
+        presence_triggered           = False
         persons_auth_status          = None
-        evidence_snapshot            = None
+        auth_check_complete          = False
         stream_priority_active       = False
         last_priority_activity_frame = 0
         priority_activity_grace_frames = max(
@@ -738,7 +721,7 @@ def main(
                 auth_success_logged_by_window = {"morning": False, "evening": False}
                 active_auth_window            = None
                 evening_auth_started          = False
-                evidence_snapshot             = None
+                presence_triggered            = False
                 stream_priority_active        = False
                 last_priority_activity_frame  = 0
                 lkg_detections                = []
@@ -770,7 +753,7 @@ def main(
 
                 state_machine.reset_session()
                 evening_auth_started   = False
-                evidence_snapshot      = None
+                presence_triggered     = False
                 stream_priority_active = False
                 last_priority_activity_frame = 0
                 if shared_inference and detector:
@@ -792,7 +775,37 @@ def main(
                 current_auth_window == "morning"
                 or (current_auth_window == "evening" and evening_auth_started)
             )
-            scanner_inference_active = auth_window_open or debug or show_all_detections
+
+            # ---- Presence-triggered / door-triggered inference ----
+            # Morning: cheap MOG2 background subtraction on INTERACTION_ZONE detects
+            #          the first person entering the scene; only then start YOLO.
+            # Evening: YOLO activates only after the door starts closing (OPEN→CLOSED),
+            #          detected by door_verifier which runs independent of tracking_active.
+            if current_auth_window == "morning" and not morning_check_done:
+                if not presence_triggered:
+                    _bx1, _bx2 = presence_roi_bbox[0], presence_roi_bbox[2]
+                    _by1, _by2 = presence_roi_bbox[1], presence_roi_bbox[3]
+                    _scan_gray = cv2.cvtColor(
+                        clean_frame[_by1:_by2, _bx1:_bx2], cv2.COLOR_BGR2GRAY
+                    )
+                    _lr = 0.1 if frame_idx <= PRESENCE_WARMUP_FRAMES else 0.005
+                    _fg = presence_bg.apply(_scan_gray, learningRate=_lr)
+                    if (
+                        frame_idx > PRESENCE_WARMUP_FRAMES
+                        and cv2.countNonZero(_fg) > PRESENCE_PIXEL_THRESHOLD
+                    ):
+                        presence_triggered = True
+                        print(
+                            f"[{cam_id}] Person presence detected (frame {frame_idx}). "
+                            f"Starting morning inference."
+                        )
+                scanner_inference_active = presence_triggered or debug or show_all_detections
+            elif current_auth_window == "evening" and not evening_check_done:
+                # YOLO only needed after door starts closing; door_verifier runs regardless
+                scanner_inference_active = evening_auth_started or debug or show_all_detections
+            else:
+                scanner_inference_active = debug or show_all_detections
+
             tracking_active = scanner_inference_active
 
             # ===== PIPELINE =====
@@ -1046,26 +1059,6 @@ def main(
             unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
             _show_all       = show_all_detections or debug
 
-            if tracking_active and should_process_frame:
-                current_snapshot = build_alert_snapshot(
-                    clean_frame,
-                    unlocker_labels,
-                    tracked_persons,
-                    auth_result,
-                    is_door_open,
-                    persons_auth_status,
-                    frame_idx,
-                    "unlocker_or_person_visible",
-                )
-                if (
-                    current_snapshot is not None
-                    and (
-                        evidence_snapshot is None
-                        or current_snapshot["score"] >= evidence_snapshot["score"]
-                    )
-                ):
-                    evidence_snapshot = current_snapshot
-
             for track_id, person in tracked_persons.items():
                 if track_id in unlocker_labels:
                     label = unlocker_labels[track_id]
@@ -1177,47 +1170,24 @@ def main(
             # ===== EVENTS + CAPTURE =====
             site_id = stream_config.get("site_id", "")
 
-            def _capture(event_type, details, check_type="System", snapshot=None):
-                capture_details = dict(details or {})
-                capture_frame = clean_frame
-                capture_unlocker_labels = unlocker_labels
-                capture_tracked_persons = tracked_persons
-                capture_auth_result = auth_result
-                capture_is_door_open = is_door_open
-                capture_persons_auth_status = persons_auth_status
-                capture_frame_idx = frame_idx
-
-                if snapshot is not None:
-                    capture_frame = snapshot["clean_frame"]
-                    capture_unlocker_labels = snapshot.get("unlocker_labels", {})
-                    capture_tracked_persons = snapshot.get("tracked_persons", {})
-                    capture_auth_result = snapshot.get("auth_result", {"authorized": False})
-                    capture_is_door_open = snapshot.get("is_door_open", is_door_open)
-                    if capture_persons_auth_status is None:
-                        capture_persons_auth_status = snapshot.get("persons_auth_status")
-                    capture_frame_idx = snapshot.get("frame_idx", frame_idx)
-                    capture_details.setdefault("snapshot_source", "cached_evidence_frame")
-                    capture_details.setdefault("snapshot_reason", snapshot.get("reason"))
-                    capture_details.setdefault("snapshot_frame_idx", capture_frame_idx)
-                    capture_details.setdefault("snapshot_age_frames", max(frame_idx - capture_frame_idx, 0))
-                    capture_details.setdefault("snapshot_score", snapshot.get("score"))
-
+            def _capture(event_type, details, check_type="System"):
+                # Always captures the live frame at event-trigger time — no stale snapshot ever used.
                 capture(
-                    alert_system, capture_frame, event_type,
+                    alert_system, clean_frame, event_type,
                     evidence_dir=evidence_dir,
                     cam_id=cam_id,
                     site_name=site_name,
                     site_id=site_id,
-                    details=capture_details,
+                    details=details or {},
                     check_type=check_type,
                     visualizer=visualizer,
-                    unlocker_labels=capture_unlocker_labels,
-                    tracked_persons=capture_tracked_persons,
-                    auth_result=capture_auth_result,
-                    is_door_open=capture_is_door_open,
-                    persons_auth_status=capture_persons_auth_status,
+                    unlocker_labels=unlocker_labels,
+                    tracked_persons=tracked_persons,
+                    auth_result=auth_result,
+                    is_door_open=is_door_open,
+                    persons_auth_status=persons_auth_status,
                     runtime_logger=runtime_logger,
-                    frame_idx=capture_frame_idx,
+                    frame_idx=frame_idx,
                 )
 
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
@@ -1247,6 +1217,9 @@ def main(
                     if shared_inference and detector:
                         detector.release_priority_lane()
                     print("[EVENING] Dual Auth FAILED: Same person attempted both unlocks.")
+                    state_machine.session["violation_type"] = None
+                    auth_check_complete = True
+                    break
                 elif current_auth_window == "morning":
                     if is_door_open:
                         morning_check_done = True
@@ -1254,6 +1227,9 @@ def main(
                         if shared_inference and detector:
                             detector.release_priority_lane()
                         print("[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
+                        state_machine.session["violation_type"] = None
+                        auth_check_complete = True
+                        break
                     else:
                         print("[MORNING] SAME_ID violation detected. Will capture at CLOSED->OPEN transition.")
 
@@ -1288,6 +1264,13 @@ def main(
                             "both_in_interaction_zone": True,
                         }, "Morning")
                         print(f"[MORNING] Authorized CLOSED->OPEN confirmed at {curr_hour_min} IST.")
+                        state_machine.session["door_open_captured"] = True
+                        morning_check_done = True
+                        stream_priority_active = False
+                        if shared_inference and detector:
+                            detector.release_priority_lane()
+                        auth_check_complete = True
+                        break
                     else:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
@@ -1297,7 +1280,7 @@ def main(
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": both_in_interaction,
                             "reason": "missing_dual_auth_or_interaction_zone",
-                        }, "Morning", snapshot=evidence_snapshot)
+                        }, "Morning")
                         print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST.")
 
                     state_machine.session["door_open_captured"] = True
@@ -1305,7 +1288,8 @@ def main(
                     stream_priority_active = False
                     if shared_inference and detector:
                         detector.release_priority_lane()
-                    evidence_snapshot = None
+                    auth_check_complete = True
+                    break
 
                 elif not morning_check_done:
                     # Idle display while waiting for door transition
@@ -1330,7 +1314,6 @@ def main(
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:
                     state_machine.reset_session()
                     evening_auth_started = True
-                    evidence_snapshot    = None
                     state_machine.session["door_closing_start_frame"] = frame_idx
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
@@ -1359,7 +1342,8 @@ def main(
                         stream_priority_active = False
                         if shared_inference and detector:
                             detector.release_priority_lane()
-                        evidence_snapshot    = None
+                        auth_check_complete = True
+                        break
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
@@ -1368,14 +1352,15 @@ def main(
                             "p2_id":      state_machine.session.get("id_b"),
                             "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
                             "reason":     "second_unlocker_timeout",
-                        }, "Evening", snapshot=evidence_snapshot)
+                        }, "Evening")
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False
                         stream_priority_active = False
                         if shared_inference and detector:
                             detector.release_priority_lane()
-                        evidence_snapshot    = None
+                        auth_check_complete = True
+                        break
                     else:
                         wait_time_rem = stream_evening_second_unlocker_timeout - elapsed_seconds
                         visualizer.draw_status_text(
@@ -1436,16 +1421,6 @@ def main(
                 )
                 print(f"[SYSTEM] Dual person authorization confirmed for {active_auth_window} window.")
 
-            # ===== TEST WINDOW EXIT =====
-            if test_window:
-                check_done = (
-                    (test_window == "morning" and morning_check_done)
-                    or (test_window == "evening" and evening_check_done)
-                )
-                if check_done:
-                    print(f"[SYSTEM] Test window '{test_window}' check complete. Exiting.")
-                    break
-
             # ===== PROGRESS LOG =====
             if (tracking_active or debug) and frame_idx % 30 == 0:
                 timers  = (
@@ -1503,6 +1478,22 @@ def main(
     print(f"[SYSTEM] Evidence files: {len(os.listdir(evidence_dir))}")
     if 'live_window_available' in locals() and live_window_available:
         cv2.destroyAllWindows()
+
+    if auth_check_complete:
+        # Release YOLO model from GPU before sleeping for hours until next window
+        detector = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+        sleep_secs = _seconds_until_next_window()
+        print(f"[SYSTEM] Auth check complete. Releasing GPU. Sleeping {sleep_secs:.0f}s until next window.")
+        time.sleep(sleep_secs)
+
+    return auth_check_complete
 
 
 if __name__ == "__main__":
@@ -1702,7 +1693,7 @@ if __name__ == "__main__":
         should_sleep_before_restart = False
         try:
             try:
-                main(
+                auth_complete = main(
                     stream_config=stream_config,
                     video_source=video_source,
                     show_live=args.show,
@@ -1721,12 +1712,17 @@ if __name__ == "__main__":
             except Exception as exc:
                 print(f"[SYSTEM] Unhandled exception in main(): {exc}")
                 import traceback; traceback.print_exc()
+                auth_complete = False
 
             if not _is_live:
                 break
 
-            print("[SYSTEM] Restarting stream in 10 seconds...")
-            should_sleep_before_restart = True
+            if auth_complete:
+                # main() already slept until next window; restart immediately
+                print("[SYSTEM] Auth complete. Restarting for next window.")
+            else:
+                print("[SYSTEM] Restarting stream in 10 seconds...")
+                should_sleep_before_restart = True
         finally:
             if args.shared_inference and detector:
                 detector.cleanup()

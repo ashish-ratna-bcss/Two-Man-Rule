@@ -108,6 +108,12 @@ BATCH_INPUT_QUEUE_SIZE = 5
 # Per-stream output queue: max results buffered before dropping oldest.
 BATCH_OUTPUT_QUEUE_SIZE = 10
 
+# ============ PRESENCE DETECTION (morning window lazy-trigger) ============
+# Background subtractor (MOG2) warmup in seconds — converted to frames using actual stream FPS
+PRESENCE_WARMUP_SECONDS: float = 4.0   # seconds; frame count = PRESENCE_WARMUP_SECONDS * fps
+# Foreground pixel count threshold on the INTERACTION_ZONE crop to confirm presence
+PRESENCE_PIXEL_THRESHOLD: int = 2500   # tune per deployment if needed
+
 # ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
 # How long to wait before treating an inference as lost (timeout).
 INFERENCE_TIMEOUT_SECONDS: float = 8.0

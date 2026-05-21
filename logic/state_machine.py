@@ -531,6 +531,10 @@ class DualAuthStateMachine:
         self.candidate_bbox = {"a": None, "b": None}
         self.slot_departed = {"a": False, "b": False}
         self.slot_zone_absent_frames = {"a": 0, "b": 0}
+        # Reset clearance gate — stale standing-zone state must not carry into a new session
+        self.standing_zone_was_occupied = False
+        self.clearance_frames_since_empty = 0
+        self.door_roi_person_overlap = False
 
 
     def _refresh_verified_slots(self, pose_results: Dict[int, Dict]):
