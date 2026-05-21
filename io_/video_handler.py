@@ -25,6 +25,10 @@ class VideoHandler:
         self.last_frame_time = 0
         self.queue_delay = 0.0
         
+        self._preserve_file_frames = (
+            not self._is_rtsp and getattr(config, "PRESERVE_FILE_FRAMES", True)
+        )
+
         # Threading state
         self.frame = None
         self.ret = False
@@ -44,9 +48,12 @@ class VideoHandler:
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.current_frame_idx = 0
 
-        # Start capture thread
-        self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self.thread.start()
+        # File replays are consumed synchronously so every frame is processed.
+        # Live RTSP stays threaded/latest-frame to prevent latency buildup.
+        self.thread = None
+        if not self._preserve_file_frames:
+            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+            self.thread.start()
 
     def _open(self) -> cv2.VideoCapture:
         """Open video source with optimized buffer settings."""
@@ -98,9 +105,8 @@ class VideoHandler:
                         self.condition.notify_all()
                     break
 
-            # File sources: pace delivery to match video FPS.
-            # Drop frames when main loop is busy (inference) — pace stays 1x.
-            # RTSP: no throttle — always deliver latest immediately.
+            # Threaded file mode is only used when PRESERVE_FILE_FRAMES=False.
+            # RTSP has no throttle and normally delivers latest-frame only.
             if not self._is_rtsp:
                 now = time.perf_counter()
                 sleep_time = _next_frame_time - now
@@ -111,7 +117,13 @@ class VideoHandler:
 
             with self.condition:
                 if self.frame is not None:
-                    self.dropped_frames += 1
+                    if self._is_rtsp and not getattr(config, "RTSP_PREFER_REALTIME", True):
+                        while self.running and self.frame is not None:
+                            self.condition.wait(timeout=0.05)
+                        if not self.running:
+                            break
+                    elif self.frame is not None:
+                        self.dropped_frames += 1
                 self.frame = frame
                 self.ret = True
                 self.last_frame_time = time.time()
@@ -123,6 +135,19 @@ class VideoHandler:
         Get the latest frame.
         If block=True, waits until a new frame is available.
         """
+        if self._preserve_file_frames:
+            ret, frame = self.cap.read()
+            if not ret:
+                self.running = False
+                self.ret = False
+                return False, None
+
+            self.ret = True
+            self.current_frame_idx += 1
+            self.last_frame_time = time.time()
+            self.queue_delay = 0.0
+            return True, frame
+
         with self.condition:
             if block:
                 # Wait for a frame to be available
@@ -170,7 +195,8 @@ class VideoHandler:
         with self.condition:
             self.condition.notify_all()
         if hasattr(self, 'thread'):
-            self.thread.join(timeout=2.0)
+            if self.thread is not None:
+                self.thread.join(timeout=2.0)
         self.cap.release()
 
     def __enter__(self):

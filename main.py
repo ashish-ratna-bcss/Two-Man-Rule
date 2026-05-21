@@ -11,7 +11,15 @@ import argparse
 import time
 import math
 import threading
-from models.pose_detector import PoseDetector, _InferenceServer, start_inference_manager, get_shared_queues
+import signal
+import subprocess
+from models.pose_detector import (
+    PoseDetector,
+    _InferenceServer,
+    STOP_REQUEST,
+    start_inference_manager,
+    get_shared_queues,
+)
 from models.tracker import PersonTracker
 from models.door_verifier import DoorVerifier
 from logic.roi_manager import ROIManager
@@ -29,12 +37,18 @@ import json
 detector = None
 
 def _gpu_server_entry(req_q, response_registry, shm_name,
-                      base_log_dir, device, half, is_priority):
+                      base_log_dir, device, half, is_priority,
+                      priority_lane=None, preload_on_start=None):
     """Redirect GPU server stdout/stderr to the standard daily logs.
     Must be at module level for multiprocessing pickle to work."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     from models.pose_detector import _InferenceServer
     from io_.terminal_tee import enable_terminal_capture
-    tier_name = "priority" if is_priority else "scan"
+    tier_name = (
+        f"priority_lane_{priority_lane}"
+        if is_priority and priority_lane is not None
+        else ("priority" if is_priority else "scan")
+    )
     restore_logs = enable_terminal_capture(
         base_dir=base_log_dir,
         site_name="gpu_servers",
@@ -43,9 +57,130 @@ def _gpu_server_entry(req_q, response_registry, shm_name,
     )
     try:
         _srv = _InferenceServer(device=device, half=half)
-        _srv.run(req_q, response_registry, shm_name, is_priority=is_priority)
+        _srv.run(
+            req_q,
+            response_registry,
+            shm_name,
+            is_priority=is_priority,
+            preload_on_start=preload_on_start,
+            lane_id=priority_lane,
+        )
     finally:
         restore_logs()
+
+
+def _start_stream_process(cmd):
+    kwargs = {}
+    if os.name != "nt":
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **kwargs)
+
+
+def _terminate_stream_process(proc, timeout=3.0):
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if os.name != "nt":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except ProcessLookupError:
+        pass
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name != "nt":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _stop_gpu_process(proc, timeout=3.0):
+    if proc is None:
+        return
+    proc.join(timeout=timeout)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=2)
+    if proc.is_alive() and hasattr(proc, "kill"):
+        proc.kill()
+        proc.join(timeout=1)
+
+
+def _parse_stream_indices(indices_text: str, total_streams: int) -> list:
+    parsed = []
+    seen   = set()
+    for token in indices_text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if not token.isdigit():
+            raise ValueError(f"Invalid stream index '{token}'.")
+        idx = int(token)
+        if idx < 0 or idx >= total_streams:
+            raise ValueError(f"Invalid stream-index {idx}. Available: 0 to {total_streams - 1}.")
+        if idx not in seen:
+            parsed.append(idx)
+            seen.add(idx)
+    if not parsed:
+        raise ValueError("No valid stream indexes provided.")
+    return parsed
+
+
+def _parse_stream_video_overrides(override_specs: list, total_streams: int) -> dict:
+    overrides = {}
+    for spec in override_specs:
+        idx_text, separator, video_source = spec.partition("=")
+        idx_text = idx_text.strip()
+        video_source = video_source.strip()
+        if not separator or not idx_text or not video_source:
+            raise ValueError(
+                f"Invalid --stream-video '{spec}'. Use INDEX=VIDEO_PATH."
+            )
+        if not idx_text.isdigit():
+            raise ValueError(f"Invalid --stream-video stream index '{idx_text}'.")
+
+        idx = int(idx_text)
+        if idx < 0 or idx >= total_streams:
+            raise ValueError(f"Invalid stream-index {idx}. Available: 0 to {total_streams - 1}.")
+        if idx in overrides:
+            raise ValueError(f"Duplicate --stream-video override for stream {idx}.")
+        overrides[idx] = video_source
+    return overrides
+
+
+def _infer_test_window_from_video_source(video_source) -> str:
+    if not isinstance(video_source, str):
+        return None
+    filename = os.path.splitext(os.path.basename(video_source))[0]
+    suffix = filename.rsplit("-", 1)[-1].upper()
+    return {"M": "morning", "E": "evening"}.get(suffix)
+
+
+def _video_source_is_live(video_source) -> bool:
+    if video_source is None or isinstance(video_source, int):
+        return True
+    return isinstance(video_source, str) and (
+        video_source.isdigit() or video_source.lower().startswith("rtsp://")
+    )
 
 
 class _NumpySafeEncoder(json.JSONEncoder):
@@ -283,6 +418,61 @@ def can_show_live_window(show_live: bool) -> bool:
     return True
 
 
+def _clone_snapshot_value(value):
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, dict):
+        return {k: _clone_snapshot_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_clone_snapshot_value(v) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_clone_snapshot_value(v) for v in value)
+    return value
+
+
+def _snapshot_score(unlocker_labels: dict, tracked_persons: dict, auth_result: dict) -> int:
+    tracked_persons = tracked_persons or {}
+    unlocker_labels = unlocker_labels or {}
+    auth_result = auth_result or {}
+
+    visible_unlockers = sum(1 for tid in unlocker_labels if tid in tracked_persons)
+    score = min(len(tracked_persons), 6) * 10
+    score += visible_unlockers * 100
+    if auth_result.get("lock_a_authorized"):
+        score += 250
+    if auth_result.get("lock_b_authorized"):
+        score += 250
+    if auth_result.get("authorized"):
+        score += 500
+    return score
+
+
+def build_alert_snapshot(
+    clean_frame: np.ndarray,
+    unlocker_labels: dict,
+    tracked_persons: dict,
+    auth_result: dict,
+    is_door_open: bool,
+    persons_auth_status,
+    frame_idx: int,
+    reason: str,
+):
+    score = _snapshot_score(unlocker_labels, tracked_persons, auth_result)
+    if score <= 0:
+        return None
+    return {
+        "clean_frame": clean_frame.copy(),
+        "unlocker_labels": dict(unlocker_labels or {}),
+        "tracked_persons": _clone_snapshot_value(tracked_persons or {}),
+        "auth_result": dict(auth_result or {}),
+        "is_door_open": bool(is_door_open),
+        "persons_auth_status": persons_auth_status,
+        "frame_idx": frame_idx,
+        "reason": reason,
+        "score": score,
+    }
+
+
 def capture(
     alert_system: AlertSystem,
     clean_frame: np.ndarray,
@@ -415,7 +605,17 @@ def main(
 
     detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
     if shared_inference:
-        scan_q, priority_q, res_registry, pri_registry, shm_config = get_shared_queues()
+        (
+            scan_q,
+            priority_q,
+            res_registry,
+            pri_registry,
+            shm_config,
+            priority_queues,
+            priority_lane_assignments,
+            priority_lane_members,
+            priority_lane_lock,
+        ) = get_shared_queues()
         if scan_q is not None and res_registry is not None:
             # Inject assigned SHM slot into registry slot_map if provided via CLI
             if shm_config and 'shm_slot' in stream_config:
@@ -424,7 +624,17 @@ def main(
                 shm_config['slot_map'] = slot_map
 
             # set_queues creates the private response queue and registers it
-            detector.set_queues(scan_q, priority_q, res_registry, pri_registry, shm_config=shm_config)
+            detector.set_queues(
+                scan_q,
+                priority_q,
+                res_registry,
+                pri_registry,
+                shm_config=shm_config,
+                priority_req_queues=priority_queues,
+                priority_lane_assignments=priority_lane_assignments,
+                priority_lane_members=priority_lane_members,
+                priority_lane_lock=priority_lane_lock,
+            )
         else:
             print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
             detector.shared_mode = False
@@ -550,6 +760,13 @@ def main(
         door_transition_pending      = False
         tracking_active              = False
         persons_auth_status          = None
+        evidence_snapshot            = None
+        stream_priority_active       = False
+        last_priority_activity_frame = 0
+        priority_activity_grace_frames = max(
+            1,
+            int(float(getattr(config, "PRIORITY_ACTIVITY_GRACE_SECONDS", 2.0)) * fps),
+        )
 
         live_window_available        = can_show_live_window(show_live)
 
@@ -582,6 +799,9 @@ def main(
                 auth_success_logged_by_window = {"morning": False, "evening": False}
                 active_auth_window            = None
                 evening_auth_started          = False
+                evidence_snapshot             = None
+                stream_priority_active        = False
+                last_priority_activity_frame  = 0
                 lkg_detections                = []
                 lkg_consecutive_timeouts      = 0
                 state_machine.reset_session()
@@ -611,6 +831,11 @@ def main(
 
                 state_machine.reset_session()
                 evening_auth_started   = False
+                evidence_snapshot      = None
+                stream_priority_active = False
+                last_priority_activity_frame = 0
+                if shared_inference and detector:
+                    detector.release_priority_lane()
                 tracked_persons        = {}
                 occupancy_status       = "OK"
                 lkg_detections         = []
@@ -623,31 +848,35 @@ def main(
                 }
                 active_auth_window = current_auth_window
 
-            tracking_active = (
+            auth_window_open = current_auth_window is not None
+            auth_tracking_allowed = (
                 current_auth_window == "morning"
                 or (current_auth_window == "evening" and evening_auth_started)
-                or debug
-                or show_all_detections
             )
+            scanner_inference_active = auth_window_open or debug or show_all_detections
+            tracking_active = scanner_inference_active
 
             # ===== PIPELINE =====
-            # FSM activity signal — computed locally from this stream's own session state.
-            # True when candidate_a/b or verified id_a/b is set (unlocker interaction active).
-            # This is passed to detector.detect() so it can self-route to the priority
-            # inference queue for faster GPU turnaround during the critical auth window.
-            _fsm_active = tracking_active and (
+            # Auth windows enable scanner inference. Scanner detections promote only
+            # this stream to a priority lane; the window alone no longer does that.
+            _fsm_active = (
                 state_machine.session.get("candidate_a") is not None
                 or state_machine.session.get("candidate_b") is not None
                 or state_machine.session.get("id_a") is not None
                 or state_machine.session.get("id_b") is not None
                 or state_machine.session.get("zone_occupied") == True
             )
+            _priority_inference_active = scanner_inference_active and auth_tracking_allowed and (
+                stream_priority_active or _fsm_active
+            )
+            if shared_inference and detector and not _priority_inference_active:
+                detector.release_priority_lane()
 
-            # Dynamic process_every: run at full rate when an unlocker is being tracked.
-            # Falls back to CLI-specified process_every for idle/scanning streams.
+            # Dynamic process_every: full-rate GPU inference during active audit
+            # attempts so initial unlocker contact is not missed.
             _effective_process_every = (
                 1
-                if (_fsm_active and shared_inference)
+                if _priority_inference_active
                 else process_every
             )
 
@@ -663,7 +892,8 @@ def main(
                 t0 = time.perf_counter()
 
                 if tracking_active:
-                    raw_detections = detector.detect(frame, fsm_is_active=_fsm_active)
+                    raw_detections = detector.detect(frame, fsm_is_active=_priority_inference_active)
+                    freeze_fsm_for_timeout = False
 
                     # ----------------------------------------------------------
                     # Inference result handling — three distinct outcomes:
@@ -671,8 +901,8 @@ def main(
                     #   raw_detections is None  → INFERENCE_TIMEOUT
                     #       The GPU server did not respond within the deadline.
                     #       Transport failure — do NOT advance the FSM toward
-                    #       UNAUTHORIZED.  Reuse LKG detections so the tracker
-                    #       can coast and timers are not wiped.
+                    #       UNAUTHORIZED.  Keep tracker/FSM state frozen so
+                    #       candidate grace and timers are not wiped.
                     #
                     #   raw_detections == []    → GENUINE EMPTY RESULT
                     #       GPU ran successfully and found no persons.
@@ -682,7 +912,7 @@ def main(
                     #       Normal path. Update LKG cache and reset timeout counter.
                     # ----------------------------------------------------------
                     if raw_detections is None:
-                        # INFERENCE_TIMEOUT — hold state with LKG
+                        # INFERENCE_TIMEOUT: hold tracker/FSM state briefly.
                         lkg_consecutive_timeouts += 1
                         if lkg_consecutive_timeouts == 1:
                             print(
@@ -697,7 +927,9 @@ def main(
                             )
 
                         if lkg_consecutive_timeouts <= LKG_MAX_AGE:
-                            # Use stale-but-valid detections to coast the tracker
+                            # Short transport timeout: keep last tracker/FSM state intact.
+                            # A missing GPU reply should not consume candidate grace.
+                            freeze_fsm_for_timeout = True
                             detections = lkg_detections
                         else:
                             # Too many consecutive timeouts — GPU server likely down.
@@ -720,49 +952,69 @@ def main(
                         lkg_detections           = raw_detections   # update cache
                         detections               = raw_detections
 
-                    # Protect verified/candidate IDs from tracker Re-ID theft
-                    _verified_ids = set()
-                    for _s in ("a", "b"):
-                        for _key in (f"id_{_s}", f"candidate_{_s}"):
-                            _v = state_machine.session.get(_key)
-                            if _v is not None:
-                                _verified_ids.add(_v)
-                        _tag = f"P{1 if _s == 'a' else 2}_unlocker"
-                        _verified_ids.update(state_machine.all_unlocker_ids.get(_tag, set()))
+                    if not freeze_fsm_for_timeout:
+                        # Protect verified/candidate IDs from tracker Re-ID theft
+                        _verified_ids = set()
+                        for _s in ("a", "b"):
+                            for _key in (f"id_{_s}", f"candidate_{_s}"):
+                                _v = state_machine.session.get(_key)
+                                if _v is not None:
+                                    _verified_ids.add(_v)
+                            _tag = f"P{1 if _s == 'a' else 2}_unlocker"
+                            _verified_ids.update(state_machine.all_unlocker_ids.get(_tag, set()))
 
-                    tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
+                        tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
 
-                    auth_active = (
-                        current_auth_window == "morning"
-                        or (current_auth_window == "evening" and evening_auth_started)
-                        or (current_auth_window is None and (debug or show_all_detections))
-                    )
+                        auth_active = (
+                            current_auth_window == "morning"
+                            or (current_auth_window == "evening" and evening_auth_started)
+                            or (current_auth_window is None and (debug or show_all_detections))
+                        )
 
-                    if auth_active:
-                        occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
-                        state_machine.update_timers(tracked_persons, frame_step=frame_step)
-                        auth_result = state_machine.check_authorization()
-                    else:
-                        state_machine.active_ids_in_zone = set()
-                        state_machine.session["improper_positioning"] = None
-                        occupancy_status = "OK"
-                        auth_result = {
-                            "authorized":        False,
-                            "lock_a_authorized": False,
-                            "lock_b_authorized": False,
-                            "violation_type":    "INCOMPLETE",
-                        }
+                        if auth_active:
+                            occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
+                            state_machine.update_timers(tracked_persons, frame_step=frame_step)
+                            auth_result = state_machine.check_authorization()
+                        else:
+                            state_machine.active_ids_in_zone = set()
+                            state_machine.session["improper_positioning"] = None
+                            occupancy_status = "OK"
+                            auth_result = {
+                                "authorized":        False,
+                                "lock_a_authorized": False,
+                                "lock_b_authorized": False,
+                                "violation_type":    "INCOMPLETE",
+                            }
+
+                        priority_activity_now = state_machine.has_priority_activity(tracked_persons)
+                        _fsm_active_after = (
+                            state_machine.session.get("candidate_a") is not None
+                            or state_machine.session.get("candidate_b") is not None
+                            or state_machine.session.get("id_a") is not None
+                            or state_machine.session.get("id_b") is not None
+                            or state_machine.session.get("zone_occupied") == True
+                        )
+                        if auth_tracking_allowed and (priority_activity_now or _fsm_active_after):
+                            if not stream_priority_active:
+                                print(f"[{cam_id}] Scanner promoted stream to PRIORITY inference.")
+                            stream_priority_active = True
+                            last_priority_activity_frame = frame_idx
+                        elif stream_priority_active and not _fsm_active_after:
+                            inactive_frames = frame_idx - last_priority_activity_frame
+                            if inactive_frames >= priority_activity_grace_frames:
+                                stream_priority_active = False
+                                if shared_inference and detector:
+                                    detector.release_priority_lane()
+                                print(
+                                    f"[{cam_id}] Priority activity idle for "
+                                    f"{inactive_frames / max(fps, 1):.1f}s. Returning to SCANNER."
+                                )
 
                 is_door_open = False
                 ssim_val     = None
                 if door_verifier:
                     if current_auth_window == "morning" and not morning_check_done:
-                        check_door = (
-                            state_machine.session.get("id_a") is not None
-                            or state_machine.session.get("id_b") is not None
-                            or state_machine.session.get("candidate_a") is not None
-                            or state_machine.session.get("candidate_b") is not None
-                        )
+                        check_door = True
                     elif current_auth_window == "evening" and not evening_check_done:
                         check_door = True
                     else:
@@ -802,6 +1054,26 @@ def main(
 
             unlocker_labels = get_unlocker_labels(state_machine, tracked_persons, frame=frame)
             _show_all       = show_all_detections or debug
+
+            if tracking_active and should_process_frame:
+                current_snapshot = build_alert_snapshot(
+                    clean_frame,
+                    unlocker_labels,
+                    tracked_persons,
+                    auth_result,
+                    is_door_open,
+                    persons_auth_status,
+                    frame_idx,
+                    "unlocker_or_person_visible",
+                )
+                if (
+                    current_snapshot is not None
+                    and (
+                        evidence_snapshot is None
+                        or current_snapshot["score"] >= evidence_snapshot["score"]
+                    )
+                ):
+                    evidence_snapshot = current_snapshot
 
             for track_id, person in tracked_persons.items():
                 if track_id in unlocker_labels:
@@ -868,16 +1140,25 @@ def main(
                     )
                     visualizer.draw_status_text(frame, ai_status, (10, 55), color=(0, 165, 255))
                 else:
-                    if not tracking_active:
+                    if not scanner_inference_active:
                         ai_status = (
                             "AI tracking: waiting for OPEN->CLOSE"
                             if current_auth_window == "evening"
                             else "AI tracking: OFF outside audit window"
                         )
+                    elif current_auth_window == "evening" and not evening_auth_started:
+                        ai_status = (
+                            f"AI SCANNER: {inference_ms:.0f}ms | "
+                            "watching for OPEN->CLOSE"
+                        )
+                    elif _priority_inference_active:
+                        ai_status = (
+                            f"AI PRIORITY: {inference_ms:.0f}ms | Every 1 frame | "
+                            f"IDs only for unlockers"
+                        )
                     else:
                         ai_status = (
-                            f"AI: {inference_ms:.0f}ms | Every {process_every} frame(s) | "
-                            f"IDs only for unlockers"
+                            f"AI SCANNER: {inference_ms:.0f}ms | Every {process_every} frame(s)"
                         )
                     visualizer.draw_status_text(frame, ai_status, (10, 55))
 
@@ -905,23 +1186,47 @@ def main(
             # ===== EVENTS + CAPTURE =====
             site_id = stream_config.get("site_id", "")
 
-            def _capture(event_type, details, check_type="System"):
+            def _capture(event_type, details, check_type="System", snapshot=None):
+                capture_details = dict(details or {})
+                capture_frame = clean_frame
+                capture_unlocker_labels = unlocker_labels
+                capture_tracked_persons = tracked_persons
+                capture_auth_result = auth_result
+                capture_is_door_open = is_door_open
+                capture_persons_auth_status = persons_auth_status
+                capture_frame_idx = frame_idx
+
+                if snapshot is not None:
+                    capture_frame = snapshot["clean_frame"]
+                    capture_unlocker_labels = snapshot.get("unlocker_labels", {})
+                    capture_tracked_persons = snapshot.get("tracked_persons", {})
+                    capture_auth_result = snapshot.get("auth_result", {"authorized": False})
+                    capture_is_door_open = snapshot.get("is_door_open", is_door_open)
+                    if capture_persons_auth_status is None:
+                        capture_persons_auth_status = snapshot.get("persons_auth_status")
+                    capture_frame_idx = snapshot.get("frame_idx", frame_idx)
+                    capture_details.setdefault("snapshot_source", "cached_evidence_frame")
+                    capture_details.setdefault("snapshot_reason", snapshot.get("reason"))
+                    capture_details.setdefault("snapshot_frame_idx", capture_frame_idx)
+                    capture_details.setdefault("snapshot_age_frames", max(frame_idx - capture_frame_idx, 0))
+                    capture_details.setdefault("snapshot_score", snapshot.get("score"))
+
                 capture(
-                    alert_system, clean_frame, event_type,
+                    alert_system, capture_frame, event_type,
                     evidence_dir=evidence_dir,
                     cam_id=cam_id,
                     site_name=site_name,
                     site_id=site_id,
-                    details=details,
+                    details=capture_details,
                     check_type=check_type,
                     visualizer=visualizer,
-                    unlocker_labels=unlocker_labels,
-                    tracked_persons=tracked_persons,
-                    auth_result=auth_result,
-                    is_door_open=is_door_open,
-                    persons_auth_status=persons_auth_status,
+                    unlocker_labels=capture_unlocker_labels,
+                    tracked_persons=capture_tracked_persons,
+                    auth_result=capture_auth_result,
+                    is_door_open=capture_is_door_open,
+                    persons_auth_status=capture_persons_auth_status,
                     runtime_logger=runtime_logger,
-                    frame_idx=frame_idx,
+                    frame_idx=capture_frame_idx,
                 )
 
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
@@ -947,10 +1252,16 @@ def main(
                 if current_auth_window == "evening":
                     evening_check_done   = True
                     evening_auth_started = False
+                    stream_priority_active = False
+                    if shared_inference and detector:
+                        detector.release_priority_lane()
                     print("[EVENING] Dual Auth FAILED: Same person attempted both unlocks.")
                 elif current_auth_window == "morning":
                     if is_door_open:
                         morning_check_done = True
+                        stream_priority_active = False
+                        if shared_inference and detector:
+                            detector.release_priority_lane()
                         print("[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
                     else:
                         print("[MORNING] SAME_ID violation detected. Will capture at CLOSED->OPEN transition.")
@@ -995,11 +1306,15 @@ def main(
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": both_in_interaction,
                             "reason": "missing_dual_auth_or_interaction_zone",
-                        }, "Morning")
+                        }, "Morning", snapshot=evidence_snapshot)
                         print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST.")
 
                     state_machine.session["door_open_captured"] = True
                     morning_check_done = True
+                    stream_priority_active = False
+                    if shared_inference and detector:
+                        detector.release_priority_lane()
+                    evidence_snapshot = None
 
                 elif not morning_check_done:
                     # Idle display while waiting for door transition
@@ -1024,7 +1339,7 @@ def main(
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:
                     state_machine.reset_session()
                     evening_auth_started = True
-                    tracking_active      = True
+                    evidence_snapshot    = None
                     state_machine.session["door_closing_start_frame"] = frame_idx
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
@@ -1050,6 +1365,10 @@ def main(
                         print(f"[EVENING] Authorized closure confirmed at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False
+                        stream_priority_active = False
+                        if shared_inference and detector:
+                            detector.release_priority_lane()
+                        evidence_snapshot    = None
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
@@ -1058,10 +1377,14 @@ def main(
                             "p2_id":      state_machine.session.get("id_b"),
                             "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
                             "reason":     "second_unlocker_timeout",
-                        }, "Evening")
+                        }, "Evening", snapshot=evidence_snapshot)
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False
+                        stream_priority_active = False
+                        if shared_inference and detector:
+                            detector.release_priority_lane()
+                        evidence_snapshot    = None
                     else:
                         wait_time_rem = stream_evening_second_unlocker_timeout - elapsed_seconds
                         visualizer.draw_status_text(
@@ -1191,6 +1514,13 @@ if __name__ == "__main__":
     parser.add_argument("--stream-index", type=int, default=None)
     parser.add_argument("--stream-indices", type=str, default=None,
                         help="Comma-separated stream indexes (e.g. 0,2,4).")
+    parser.add_argument(
+        "--stream-video",
+        action="append",
+        default=[],
+        metavar="INDEX=VIDEO_PATH",
+        help="Override one configured stream with a local video. Repeat for batches.",
+    )
     parser.add_argument("video_source", nargs="?", default=None)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--scale-rois", action="store_true")
@@ -1200,8 +1530,10 @@ if __name__ == "__main__":
     parser.add_argument("--show-all-detections", action="store_true")
     parser.add_argument("--test-window", type=str, choices=["morning", "evening"], default=None)
     parser.add_argument(
-        "--shared-inference", action="store_true",
+        "--shared-inference",
+        action=argparse.BooleanOptionalAction,
         default=getattr(config, "SHARED_INFERENCE_ENABLED", False),
+        help="Use the shared scan/priority GPU workers for multi-stream inference.",
     )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--shm-slot", type=int, default=-1)
@@ -1211,24 +1543,18 @@ if __name__ == "__main__":
         print("[ERROR] Use either --stream-index or --stream-indices, not both.")
         sys.exit(1)
 
-    def _parse_stream_indices(indices_text: str, total_streams: int) -> list:
-        parsed = []
-        seen   = set()
-        for token in indices_text.split(","):
-            token = token.strip()
-            if not token:
-                continue
-            if not token.isdigit():
-                raise ValueError(f"Invalid stream index '{token}'.")
-            idx = int(token)
-            if idx < 0 or idx >= total_streams:
-                raise ValueError(f"Invalid stream-index {idx}. Available: 0 to {total_streams - 1}.")
-            if idx not in seen:
-                parsed.append(idx)
-                seen.add(idx)
-        if not parsed:
-            raise ValueError("No valid stream indexes provided.")
-        return parsed
+    if args.video_source is not None and args.stream_video:
+        print("[ERROR] Use either positional video_source or --stream-video overrides, not both.")
+        sys.exit(1)
+
+    try:
+        stream_video_sources = _parse_stream_video_overrides(
+            args.stream_video,
+            len(config.STREAMS_CONFIG),
+        )
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        sys.exit(1)
 
     if args.stream_indices is not None:
         if args.video_source is not None:
@@ -1243,11 +1569,18 @@ if __name__ == "__main__":
         selected_stream_indexes = [args.stream_index]
     elif args.video_source is not None:
         selected_stream_indexes = [0]
+    elif stream_video_sources:
+        selected_stream_indexes = list(stream_video_sources)
     else:
         selected_stream_indexes = list(range(len(config.STREAMS_CONFIG)))
 
+    unselected_video_indexes = set(stream_video_sources) - set(selected_stream_indexes)
+    if unselected_video_indexes:
+        extras = ",".join(str(idx) for idx in sorted(unselected_video_indexes))
+        print(f"[ERROR] --stream-video overrides are not selected by stream index: {extras}.")
+        sys.exit(1)
+
     if len(selected_stream_indexes) > 1:
-        import subprocess
         if len(selected_stream_indexes) == len(config.STREAMS_CONFIG):
             print(f"[SYSTEM] Launching all {len(config.STREAMS_CONFIG)} streams in parallel...")
         else:
@@ -1281,9 +1614,16 @@ if __name__ == "__main__":
 
             manager           = mp.Manager()
             req_q_scan        = manager.Queue()   # Scanning tier: idle/background streams
-            req_q_priority    = manager.Queue()   # Priority tier: active unlocker streams
+            priority_lane_count = max(1, int(getattr(config, "PRIORITY_GPU_SERVER_COUNT", 1)))
+            req_q_priority_lanes = [manager.Queue() for _ in range(priority_lane_count)]
+            req_q_priority    = req_q_priority_lanes[0]   # Backward-compatible primary priority queue
             response_registry = manager.dict()    # {client_id: private mp.Queue}
             priority_registry = manager.dict()    # {client_id: "SCANNING"|"ACTIVE"} (observability)
+            priority_lane_assignments = manager.dict()  # {client_id: lane_id}
+            priority_lane_members = manager.dict({
+                lane_id: tuple() for lane_id in range(priority_lane_count)
+            })
+            priority_lane_lock = manager.RLock()
 
             shm_config = manager.dict({
                 'name':      shm.name if shm else None,
@@ -1295,6 +1635,10 @@ if __name__ == "__main__":
                 req_q_scan, req_q_priority,
                 response_registry, priority_registry,
                 shm_config,
+                priority_req_queues=req_q_priority_lanes,
+                priority_lane_assignments=priority_lane_assignments,
+                priority_lane_members=priority_lane_members,
+                priority_lane_lock=priority_lane_lock,
             )
             threading.Thread(target=manager_server.serve_forever, daemon=True).start()
 
@@ -1306,35 +1650,62 @@ if __name__ == "__main__":
             scanning_proc = mp.Process(
                 target=_gpu_server_entry,
                 args=(req_q_scan, response_registry, shm_name,
-                      gpu_log_dir, args.device, not args.no_half, False),
+                      gpu_log_dir, args.device, not args.no_half, False,
+                      None, getattr(config, "GPU_PRELOAD_ON_START", False)),
                 daemon=True,
             )
             scanning_proc.start()
             print(f"[SYSTEM] GPU SCANNING server active (PID: {scanning_proc.pid}). "
-                  f"Logs in: {os.path.join(gpu_log_dir, 'gpu_master', 'scan')}")
+                  f"Logs under: {os.path.join(gpu_log_dir, 'gpu_servers')}")
 
-            # PRIORITY server — handles active-unlocker streams
-            priority_proc = mp.Process(
-                target=_gpu_server_entry,
-                args=(req_q_priority, response_registry, shm_name,
-                      gpu_log_dir, args.device, not args.no_half, True),
-                daemon=True,
-            )
-            priority_proc.start()
-            print(f"[SYSTEM] GPU PRIORITY server active (PID: {priority_proc.pid}). "
-                  f"Logs in: {os.path.join(gpu_log_dir, 'gpu_master', 'priority')}")
+            # PRIORITY lanes — active streams claim/release pair-sized GPU lanes dynamically.
+            priority_procs = []
+            preload_lanes = max(0, int(getattr(config, "PRIORITY_PRELOAD_LANES", 0)))
+            for lane_id, lane_queue in enumerate(req_q_priority_lanes):
+                preload_lane = (
+                    getattr(config, "GPU_PRELOAD_ON_START", False)
+                    and lane_id < preload_lanes
+                )
+                priority_proc = mp.Process(
+                    target=_gpu_server_entry,
+                    args=(lane_queue, response_registry, shm_name,
+                          gpu_log_dir, args.device, not args.no_half, True,
+                          lane_id, preload_lane),
+                    daemon=True,
+                )
+                priority_proc.start()
+                priority_procs.append(priority_proc)
+                warm_state = "preloaded" if preload_lane else "lazy"
+                print(
+                    f"[SYSTEM] GPU PRIORITY lane {lane_id} active "
+                    f"(PID: {priority_proc.pid}, {warm_state}). "
+                    f"Logs under: {os.path.join(gpu_log_dir, 'gpu_servers')}"
+                )
 
             print(
-                f"[SYSTEM] Dual GPU Masters active. "
+                f"[SYSTEM] Shared GPU Masters active: 1 scanning server + "
+                f"{priority_lane_count} priority lane(s), "
+                f"{getattr(config, 'PRIORITY_STREAMS_PER_SERVER', 2)} active stream(s) per lane. "
                 f"Per-client routing enabled for {len(selected_stream_indexes)} streams."
             )
+        else:
+            base_cmd.append("--no-shared-inference")
 
         for pos, i in enumerate(selected_stream_indexes):
             cmd = base_cmd + ["--stream-index", str(i)]
             if args.shared_inference and shm:
                 cmd.extend(["--shm-slot", str(pos)])
-            p = subprocess.Popen(cmd)
-            processes.append((p, cmd, i))
+            stream_video_source = stream_video_sources.get(i)
+            if stream_video_source is not None:
+                cmd.append(stream_video_source)
+            p = _start_stream_process(cmd)
+            processes.append({
+                "process": p,
+                "cmd": cmd,
+                "stream_index": i,
+                "restart_on_exit": _video_source_is_live(stream_video_source),
+                "completed": False,
+            })
             print(f"[SYSTEM] Launched Stream {i} (PID: {p.pid})")
 
             if pos < len(selected_stream_indexes) - 1:
@@ -1346,36 +1717,72 @@ if __name__ == "__main__":
         try:
             while True:
                 time.sleep(5)
-                for idx, (p, cmd, s_idx) in enumerate(processes):
+                for entry in processes:
+                    if entry["completed"]:
+                        continue
+                    p = entry["process"]
                     if p.poll() is not None:
+                        s_idx = entry["stream_index"]
+                        if not entry["restart_on_exit"]:
+                            entry["completed"] = True
+                            print(
+                                f"[SYSTEM] Video Stream {s_idx} finished "
+                                f"(PID: {p.pid}, code {p.returncode})."
+                            )
+                            continue
+
                         print(
                             f"[WATCHDOG] Stream {s_idx} (PID: {p.pid}) died "
                             f"(code {p.returncode}). Restarting..."
                         )
-                        new_p = subprocess.Popen(cmd)
-                        processes[idx] = (new_p, cmd, s_idx)
+                        new_p = _start_stream_process(entry["cmd"])
+                        entry["process"] = new_p
                         print(f"[WATCHDOG] Stream {s_idx} restarted (PID: {new_p.pid})")
+                if all(entry["completed"] for entry in processes):
+                    print("[SYSTEM] All local video streams finished.")
+                    break
         except KeyboardInterrupt:
             print("\n[SYSTEM] Shutting down...")
-            for p, _, _ in processes:
-                p.terminate()
-                try:
-                    p.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    p.kill()
-            if args.shared_inference:
-                print("[SYSTEM] Shutting down GPU Masters...")
-                for _proc_name, _proc in [("scanning", locals().get("scanning_proc")),
-                                          ("priority",  locals().get("priority_proc"))]:
-                    if _proc is not None:
-                        _proc.terminate()
-                        _proc.join(timeout=2)
+        finally:
+            previous_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+            try:
+                for entry in processes:
+                    _terminate_stream_process(entry["process"])
+                if args.shared_inference:
+                    print("[SYSTEM] Shutting down GPU Masters...")
+                    shutdown_queues = [locals().get("req_q_scan")]
+                    shutdown_queues.extend(locals().get("req_q_priority_lanes", []))
+                    for _queue in shutdown_queues:
+                        if _queue is not None:
+                            try:
+                                _queue.put(STOP_REQUEST)
+                            except Exception:
+                                pass
+                    gpu_processes = [("scanning", locals().get("scanning_proc"))]
+                    gpu_processes.extend(
+                        (f"priority_lane_{idx}", proc)
+                        for idx, proc in enumerate(locals().get("priority_procs", []))
+                    )
+                    for _proc_name, _proc in gpu_processes:
+                        _stop_gpu_process(_proc)
+                    if 'manager' in locals() and manager is not None:
+                        try:
+                            manager.shutdown()
+                        except Exception:
+                            pass
+            finally:
                 if 'shm' in locals() and shm:
-                    shm.close()
+                    try:
+                        shm.close()
+                    except Exception:
+                        pass
                     try:
                         shm.unlink()
                     except FileNotFoundError:
                         pass
+                    except Exception as exc:
+                        print(f"[SYSTEM] WARNING: Could not unlink SharedMemory: {exc}")
+                signal.signal(signal.SIGINT, previous_sigint_handler)
         sys.exit(0)
 
     # ---- Single stream path ----
@@ -1388,13 +1795,19 @@ if __name__ == "__main__":
     if args.shm_slot >= 0:
         stream_config['shm_slot'] = args.shm_slot
 
-    video_source = args.video_source
+    video_source = stream_video_sources.get(args.stream_index, args.video_source)
     if video_source is not None and video_source.isdigit():
         video_source = int(video_source)
 
-    _is_live = video_source is None or (
-        isinstance(video_source, str) and video_source.lower().startswith("rtsp://")
-    )
+    if args.test_window is None:
+        args.test_window = _infer_test_window_from_video_source(video_source)
+        if args.test_window is not None:
+            print(
+                f"[SYSTEM] Inferred test window '{args.test_window}' "
+                f"from video source '{video_source}'."
+            )
+
+    _is_live = _video_source_is_live(video_source)
 
     while True:
         _restore_terminal_capture = enable_terminal_capture(

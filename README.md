@@ -80,7 +80,21 @@ All overlays visible on screen (ROI polygons, SSIM, AI ms, progress bars, pose k
 python3 main.py 28-E.mp4 --stream-index 0 --test-window morning --show --debug
 ```
 
-### 5. Performance Tuning
+### 5. Multiple Local Video Batch
+Use one `--stream-video INDEX=PATH` flag per clip to replay several configured cameras through the normal multi-stream supervisor and shared GPU workers:
+```bash
+python3 main.py \
+  --stream-video 7=GF-10-29-18-M.mp4 \
+  --stream-video 6=GF-6-18-18-M.mp4 \
+  --stream-video 5=FF-3-21-13-M.mp4 \
+  --stream-video 4=GF-5-25-12-M.mp4 \
+  --test-window morning --device cuda --process-every 1
+```
+Keep one batch to one auth window. For local test files ending in `-M` or `-E`, the child stream automatically forces `morning` or `evening` logic. An explicit `--test-window` still overrides the filename for every selected stream. File-backed child streams exit at EOF instead of being restarted by the RTSP watchdog.
+
+Shared inference remains enabled by config for the command above. Add `--no-shared-inference` only when testing a small batch with one standalone model per process.
+
+### 6. Performance Tuning
 ```bash
 # Run inference every frame (full accuracy, slower)
 python3 main.py --process-every 1
@@ -92,7 +106,7 @@ python3 main.py --device cuda
 python3 main.py --device cuda --no-half
 ```
 
-### 6. ROI Calibration on Downscaled Clips
+### 7. ROI Calibration on Downscaled Clips
 If test video resolution differs from RTSP-calibrated 2688×1520:
 ```bash
 python3 main.py "path/to/video.mp4" --scale-rois --show --debug
@@ -112,14 +126,16 @@ Every captured screenshot contains only:
 | `video_source` | config | (Positional) Override video path/URL for the stream. |
 | `--stream-index N` | none | Single stream index from `config.STREAMS_CONFIG`. |
 | `--stream-indices a,b,c` | none | Run only selected stream indexes in parallel (example: `0,2,4`). |
+| `--stream-video INDEX=PATH` | none | Repeatable local video override for configured streams in a multi-stream test batch. |
 | `--show` | off | Enable live OpenCV preview window |
 | `--debug` | off | Show all debug overlays on live window. Screenshots always clean |
-| `--test-window morning\|evening` | off | Force auth window regardless of IST time. Exits after check complete |
+| `--test-window morning\|evening` | auto for `-M`/`-E` clips | Force auth window regardless of IST time. Exits after check complete |
 | `--process-every N` | 3 | Run pose inference every N frames |
 | `--device auto\|cuda\|cpu` | auto | Inference device |
 | `--no-half` | off | Disable CUDA half-precision |
 | `--scale-rois` | off | Scale RTSP-calibrated ROIs to a different video resolution |
 | `--show-all-detections` | off | Show all raw detections on live window (subset of `--debug`) |
+| `--shared-inference` / `--no-shared-inference` | config | Enable shared scan/priority GPU workers or use one standalone model per stream process. |
 
 ## Evidence Output Structure
 

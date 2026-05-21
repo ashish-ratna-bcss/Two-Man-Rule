@@ -76,6 +76,8 @@ YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 # ============ STREAMS & ORCHESTRATION CONFIG ============
 # Optimization & Production Flags
 RTSP_LOW_LATENCY = True
+PRESERVE_FILE_FRAMES = True       # Offline videos are read sequentially with no frame overwrite/drop.
+RTSP_PREFER_REALTIME = True       # Live RTSP keeps latest frame to avoid latency buildup.
 STAGGER_START_DELAY = 2.0  # Seconds between stream launches
 MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 
@@ -88,30 +90,30 @@ SHARED_INFERENCE_ENABLED = True   # Enabled by default for high-density scalabil
 BATCH_SIZE_LIMIT = 16             # Reduced from 32 — lower latency per batch
 INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
 
-# Priority server: handles active-unlocker streams with a small, fast batch.
-# Batches for Priority (active streams).
-# Setting this to 2 smartly balances ultra-low latency while grouping pairs
-# of active streams into a single pass to save GPU overhead.
-PRIORITY_BATCH_SIZE_LIMIT: int = 2     # Small batch → fast GPU turnaround for active streams
+# Priority lanes: active-unlocker streams dynamically claim pair-sized GPU lanes.
+# Each lane has its own request queue + inference process, so any two active
+# streams can share one fast priority batch regardless of their config index.
+PRIORITY_STREAMS_PER_SERVER: int = 2
+PRIORITY_BATCH_SIZE_LIMIT: int = 2     # One priority lane processes up to 2 active streams per pass
+PRIORITY_PRELOAD_LANES = None          # None warms every configured priority lane at startup
 
-GPU_IDLE_TIMEOUT = 300            # Seconds to keep model in VRAM after last use
+GPU_IDLE_TIMEOUT = 1800           # Seconds to keep model in VRAM after last use
+PRIORITY_GPU_IDLE_TIMEOUT = 300   # Unload idle priority-lane models after no active requests.
+PRIORITY_ACTIVITY_GRACE_SECONDS: float = 3.0  # Keep a stream on priority briefly after activity disappears.
 
 # Dynamically calculate Shared Memory buffer based on configured streams.
 # 20MB per stream provides plenty of headroom for 2688x1520 BGR frames (~12.2MB).
-MAX_SHARED_MEMORY_MB = len(STREAMS_CONFIG) * 20
-# Set to False for 24/7 deployments so it only loads into VRAM at 07:00 and 19:00.
-GPU_PRELOAD_ON_START = False
+SHARED_MEMORY_MB_PER_STREAM = 20
+# Preload avoids cold YOLO loads during the first audit frames.
+GPU_PRELOAD_ON_START = True
 
 # ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
 # SCANNING tier: how long a camera worker waits before treating a GPU reply as lost.
 # Set to 3× your p99 latency measured from gpu_server_scan.log.
-INFERENCE_TIMEOUT_SECONDS: float = 4.0
+INFERENCE_TIMEOUT_SECONDS: float = 8.0
 
-# PRIORITY tier: tighter timeout for active-unlocker streams.
-# START at 2.0s (same as scanning) — tune DOWN to p99_priority_ms * 2 / 1000
-# once gpu_server_priority.log confirms real GPU latency.
-# Example: if priority p99 = 80ms → set to 0.16s
-PRIORITY_INFERENCE_TIMEOUT_SECONDS: float = 2.0
+# PRIORITY tier: keep this high enough to cover cold starts and queue stalls.
+PRIORITY_INFERENCE_TIMEOUT_SECONDS: float = 8.0
 
 # How many consecutive inference timeouts to tolerate before the tracker stops
 # coasting on LKG and starts using empty detections (track ageing).
@@ -324,6 +326,14 @@ STREAMS_CONFIG = [
         }
     }
 ]
+
+MAX_SHARED_MEMORY_MB = len(STREAMS_CONFIG) * SHARED_MEMORY_MB_PER_STREAM
+PRIORITY_GPU_SERVER_COUNT = max(
+    1,
+    (len(STREAMS_CONFIG) + PRIORITY_STREAMS_PER_SERVER - 1) // PRIORITY_STREAMS_PER_SERVER,
+)
+if PRIORITY_PRELOAD_LANES is None:
+    PRIORITY_PRELOAD_LANES = PRIORITY_GPU_SERVER_COUNT
 
 BASE_OUTPUT_DIR = "strong_room_opening"
 BASE_LOG_DIR = "logs"

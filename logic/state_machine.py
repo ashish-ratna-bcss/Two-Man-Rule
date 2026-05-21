@@ -378,6 +378,26 @@ class DualAuthStateMachine:
         else:
             self.session["sequence_state"] = "READY_FOR_DOOR_OPEN"
 
+    def has_priority_activity(self, tracked_persons: Dict[int, Dict]) -> bool:
+        """
+        Scanner-tier trigger for priority promotion.
+
+        This is intentionally lighter than authorization: one person standing in
+        STANDING_ZONE and facing the door is enough to move this camera stream to
+        a full-rate priority lane. The full unlocker rules still run in
+        update_timers().
+        """
+        for track_id, person in tracked_persons.items():
+            pose = self._evaluate_unlock_pose(person, track_id, log=False)
+            is_standing = pose.get("feet_in_standing", False)
+            facing_correct = (
+                pose.get("shoulder_order_correct", False)
+                or pose.get("left_right_order", False)
+            )
+            if pose.get("qualified", False) or (is_standing and facing_correct):
+                return True
+        return False
+
     def _update_unlock_slot(
         self,
         slot: str,
@@ -586,7 +606,7 @@ class DualAuthStateMachine:
     # ================================================================
     # UNLOCK POSE RULES
     # ================================================================
-    def _evaluate_unlock_pose(self, person: Dict, track_id: int = None) -> Dict:
+    def _evaluate_unlock_pose(self, person: Dict, track_id: int = None, log: bool = True) -> Dict:
         """
         Evaluate whether this person's pose qualifies them for an unlock slot.
 
@@ -659,38 +679,39 @@ class DualAuthStateMachine:
             result["qualified"] = False
 
         # ── Debug logging ──────────────────────────────────────────────────────
-        id_tag = f" ID {track_id}" if track_id is not None else ""
-        if result["qualified"]:
-            optional_notes = []
-            if not result["feet_in_standing"]:
-                optional_notes.append("feet_not_in_standing")
-            if not result["left_right_order"]:
-                optional_notes.append("elbow_order_skipped")
-            if not result["waist_near_door"]:
-                optional_notes.append("waist_not_near_door")
-            note = f" (optional skipped: {', '.join(optional_notes)})" if optional_notes else ""
-            print(f"[POSE]{id_tag} Qualified: ears✓ shoulders✓ in_locks✓ head✓ arms✓{note}")
-        else:
-            failed = []
-            if not result["ear_order_correct"]:
-                failed.append("ear_order_wrong")
-            if not result["shoulder_order_correct"] and result["shoulders_in_door"]:
-                failed.append("shoulder_order_wrong")
-            if not (result["head_in_door"] or (result["shoulders_in_door"] and result["shoulder_order_correct"])):
-                failed.append("not_in_door_roi")
-            if not result["in_locks_roi"]:
-                failed.append("not_in_locks_roi")
-            if not result["arms_raised"]:
-                failed.append("arms_not_raised")
-            optional = []
-            if not result["feet_in_standing"]:
-                optional.append("feet_not_in_standing")
-            if not result["left_right_order"]:
-                optional.append("elbow_order_wrong")
-            if not result["waist_near_door"]:
-                optional.append("waist_not_near_door")
-            opt_str = f" | Optional: {', '.join(optional)}" if optional else ""
-            print(f"[POSE]{id_tag} waiting: {', '.join(failed)}{opt_str}")
+        if log:
+            id_tag = f" ID {track_id}" if track_id is not None else ""
+            if result["qualified"]:
+                optional_notes = []
+                if not result["feet_in_standing"]:
+                    optional_notes.append("feet_not_in_standing")
+                if not result["left_right_order"]:
+                    optional_notes.append("elbow_order_skipped")
+                if not result["waist_near_door"]:
+                    optional_notes.append("waist_not_near_door")
+                note = f" (optional skipped: {', '.join(optional_notes)})" if optional_notes else ""
+                print(f"[POSE]{id_tag} Qualified: ears✓ shoulders✓ in_locks✓ head✓ arms✓{note}")
+            else:
+                failed = []
+                if not result["ear_order_correct"]:
+                    failed.append("ear_order_wrong")
+                if not result["shoulder_order_correct"] and result["shoulders_in_door"]:
+                    failed.append("shoulder_order_wrong")
+                if not (result["head_in_door"] or (result["shoulders_in_door"] and result["shoulder_order_correct"])):
+                    failed.append("not_in_door_roi")
+                if not result["in_locks_roi"]:
+                    failed.append("not_in_locks_roi")
+                if not result["arms_raised"]:
+                    failed.append("arms_not_raised")
+                optional = []
+                if not result["feet_in_standing"]:
+                    optional.append("feet_not_in_standing")
+                if not result["left_right_order"]:
+                    optional.append("elbow_order_wrong")
+                if not result["waist_near_door"]:
+                    optional.append("waist_not_near_door")
+                opt_str = f" | Optional: {', '.join(optional)}" if optional else ""
+                print(f"[POSE]{id_tag} waiting: {', '.join(failed)}{opt_str}")
 
         return result
 
