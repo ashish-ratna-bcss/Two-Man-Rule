@@ -85,7 +85,7 @@ MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 # ============ GPU INFERENCE MODE ============
 # Direct mode: each stream loads its own model (no contention but high VRAM).
 # Batch mode: all streams share one GPU worker running on fixed cadence (lower VRAM, zero latency increase).
-GPU_EXECUTION_MODE = "direct"  # "direct" or "batch"
+GPU_EXECUTION_MODE = "batch"  # "direct" or "batch"
 
 # ============ ZERO-LATENCY BATCH SCHEDULER (Testing Mode) ============
 # Enable batch scheduler for predictable, no-latency multi-stream inference.
