@@ -82,38 +82,35 @@ STAGGER_START_DELAY = 2.0  # Seconds between stream launches
 MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
 
 
-# ============ SHARED INFERENCE & SCALING ============
-# When True, multiple streams share a single YOLO instance to save VRAM.
-SHARED_INFERENCE_ENABLED = True   # Enabled by default for high-density scalability
+# ============ GPU INFERENCE MODE ============
+# Direct mode: each stream loads its own model (no contention but high VRAM).
+# Batch mode: all streams share one GPU worker running on fixed cadence (lower VRAM, zero latency increase).
+GPU_EXECUTION_MODE = "direct"  # "direct" or "batch"
 
-# Scanning server: handles all idle/background streams in a larger batch.
-BATCH_SIZE_LIMIT = 16             # Reduced from 32 — lower latency per batch
-INFERENCE_BATCH_WAIT_MS = 5       # Max wait time (ms) to collect a batch
+# ============ ZERO-LATENCY BATCH SCHEDULER (Testing Mode) ============
+# Enable batch scheduler for predictable, no-latency multi-stream inference.
+# Rule: 2 streams per batch = 1 stream latency (GPU batching hides the 2nd stream overhead).
+BATCH_SCHEDULER_ENABLED = True
 
-# Priority lanes: active-unlocker streams dynamically claim pair-sized GPU lanes.
-# Each lane has its own request queue + inference process, so any two active
-# streams can share one fast priority batch regardless of their config index.
-PRIORITY_STREAMS_PER_SERVER: int = 2
-PRIORITY_BATCH_SIZE_LIMIT: int = 2     # One priority lane processes up to 2 active streams per pass
-PRIORITY_PRELOAD_LANES = None          # None warms every configured priority lane at startup
+# Batch size: 2 streams per inference pass (1-to-1 parity with standalone latency).
+BATCH_SIZE = 2
 
-GPU_IDLE_TIMEOUT = 1800           # Seconds to keep model in VRAM after last use
-PRIORITY_GPU_IDLE_TIMEOUT = 300   # Unload idle priority-lane models after no active requests.
-PRIORITY_ACTIVITY_GRACE_SECONDS: float = 3.0  # Keep a stream on priority briefly after activity disappears.
+# Fixed cadence in ms. With 2-stream batches, ~50ms keeps frames flowing nicely (~20 FPS batch rate).
+# Adjust downward for higher throughput, upward for more breathing room.
+BATCH_INFERENCE_CADENCE_MS = 50.0
 
-# Dynamically calculate Shared Memory buffer based on configured streams.
-# 20MB per stream provides plenty of headroom for 2688x1520 BGR frames (~12.2MB).
-SHARED_MEMORY_MB_PER_STREAM = 20
-# Preload avoids cold YOLO loads during the first audit frames.
-GPU_PRELOAD_ON_START = True
+# GPU memory pre-allocation (MB). 1GB safe for most GPUs; reduce to 512 for RTX4060.
+BATCH_GPU_PREALLOCATE_MB = 1024.0
+
+# Per-stream input queue: max frames buffered before dropping oldest.
+BATCH_INPUT_QUEUE_SIZE = 5
+
+# Per-stream output queue: max results buffered before dropping oldest.
+BATCH_OUTPUT_QUEUE_SIZE = 10
 
 # ============ INFERENCE TIMEOUT & LKG (Last-Known-Good) ============
-# SCANNING tier: how long a camera worker waits before treating a GPU reply as lost.
-# Set to 3× your p99 latency measured from gpu_server_scan.log.
+# How long to wait before treating an inference as lost (timeout).
 INFERENCE_TIMEOUT_SECONDS: float = 8.0
-
-# PRIORITY tier: keep this high enough to cover cold starts and queue stalls.
-PRIORITY_INFERENCE_TIMEOUT_SECONDS: float = 8.0
 
 # How many consecutive inference timeouts to tolerate before the tracker stops
 # coasting on LKG and starts using empty detections (track ageing).
@@ -326,14 +323,6 @@ STREAMS_CONFIG = [
         }
     }
 ]
-
-MAX_SHARED_MEMORY_MB = len(STREAMS_CONFIG) * SHARED_MEMORY_MB_PER_STREAM
-PRIORITY_GPU_SERVER_COUNT = max(
-    1,
-    (len(STREAMS_CONFIG) + PRIORITY_STREAMS_PER_SERVER - 1) // PRIORITY_STREAMS_PER_SERVER,
-)
-if PRIORITY_PRELOAD_LANES is None:
-    PRIORITY_PRELOAD_LANES = PRIORITY_GPU_SERVER_COUNT
 
 BASE_OUTPUT_DIR = "strong_room_opening"
 BASE_LOG_DIR = "logs"

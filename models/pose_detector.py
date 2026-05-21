@@ -2,273 +2,131 @@
 from ultralytics import YOLO
 import numpy as np
 import torch
-from typing import List, Dict, Optional
+from typing import List, Dict, Tuple, Optional
 import config
 import time
-import os
-import multiprocessing as mp
-mp.current_process().authkey = b'pmj_auth'
-from multiprocessing.managers import SyncManager, DictProxy, ListProxy
-from multiprocessing import shared_memory, resource_tracker
 import queue
-
-
-# ---------------------------------------------------------------------------
-# InferenceManager — hosts the request queue and the per-client registry.
-#
-# Architecture (NEW):
-#   - One shared REQUEST queue:  all workers → GPU server.
-#   - Per-client RESPONSE queues: GPU server → exactly one worker.
-#     Each worker registers its own mp.Queue in a Manager dict keyed by
-#     client_id.  The GPU server does a direct dict-lookup and puts the
-#     result into the correct queue — no polling, no re-queuing, O(1).
-#
-# This replaces the broken single shared response queue where all N workers
-# polled the same queue, re-queued foreign messages, and exhausted their
-# timeout windows on O(N²) re-queue churn.
-# ---------------------------------------------------------------------------
-
-class InferenceManager(SyncManager):
-    pass
-
-
-STOP_REQUEST = ("__STOP_INFERENCE_SERVER__", None)
-
-
-def _is_stop_request(req) -> bool:
-    return (
-        isinstance(req, tuple)
-        and len(req) == 2
-        and req[0] == STOP_REQUEST[0]
-    )
+import multiprocessing as mp
+from multiprocessing import shared_memory
 
 
 def _attach_shared_memory(name: str):
-    """Attach to supervisor-owned shared memory without tracking ownership."""
-    try:
-        return shared_memory.SharedMemory(name=name, track=False)
-    except TypeError:
-        shm = shared_memory.SharedMemory(name=name)
-        try:
-            resource_tracker.unregister(shm._name, "shared_memory")
-        except Exception:
-            pass
-        return shm
+    return shared_memory.SharedMemory(name=name)
 
 
-def get_shared_queues(address=('127.0.0.1', 50000), authkey=b'pmj_auth'):
-    """Connect to a running InferenceManager and return the shared objects.
-
-    Returns:
-        (
-            scan_req_q, priority_req_q, response_registry, priority_registry,
-            shm_config, priority_req_queues, priority_lane_assignments,
-            priority_lane_members, priority_lane_lock
-        )
-        response_registry: Manager dict {client_id -> mp.Queue}  (routing)
-        priority_registry: Manager dict {client_id -> str}        (observability)
-    """
-    InferenceManager.register('get_scan_queue')
-    InferenceManager.register('get_priority_queue')
-    InferenceManager.register('get_priority_queues', proxytype=ListProxy)
-    InferenceManager.register('get_response_registry', proxytype=DictProxy)
-    InferenceManager.register('get_priority_registry', proxytype=DictProxy)
-    InferenceManager.register('get_shared_memory_config', proxytype=DictProxy)
-    InferenceManager.register('get_priority_lane_assignments', proxytype=DictProxy)
-    InferenceManager.register('get_priority_lane_members', proxytype=DictProxy)
-    InferenceManager.register('get_priority_lane_lock')
-    manager = InferenceManager(address=address, authkey=authkey)
-    try:
-        manager.connect()
-        return (
-            manager.get_scan_queue(),
-            manager.get_priority_queue(),
-            manager.get_response_registry(),
-            manager.get_priority_registry(),
-            manager.get_shared_memory_config(),
-            manager.get_priority_queues(),
-            manager.get_priority_lane_assignments(),
-            manager.get_priority_lane_members(),
-            manager.get_priority_lane_lock(),
-        )
-    except Exception as e:
-        print(f"[InferenceManager] Could not connect to shared server: {e}")
-        return None, None, None, None, None, None, None, None, None
-
-
-def start_inference_manager(
-    scan_req_q,
-    priority_req_q,
-    response_registry,
-    priority_registry,
-    shm_config,
-    priority_req_queues=None,
-    priority_lane_assignments=None,
-    priority_lane_members=None,
-    priority_lane_lock=None,
-    address=('127.0.0.1', 50000),
-    authkey=b'pmj_auth',
-):
-    """Start a manager server hosting both request queues, response registry,
-    priority registry and shm config."""
-    InferenceManager.register('get_scan_queue',          callable=lambda: scan_req_q)
-    InferenceManager.register('get_priority_queue',      callable=lambda: priority_req_q)
-    InferenceManager.register(
-        'get_priority_queues',
-        callable=lambda: priority_req_queues if priority_req_queues is not None else [priority_req_q],
-        proxytype=ListProxy,
+def _is_stop_request(request) -> bool:
+    return (
+        request == "__STOP__"
+        or (isinstance(request, dict) and request.get("stop") is True)
+        or (isinstance(request, tuple) and len(request) > 0 and request[0] == "__STOP__")
     )
-    InferenceManager.register('get_response_registry',   callable=lambda: response_registry,  proxytype=DictProxy)
-    InferenceManager.register('get_priority_registry',   callable=lambda: priority_registry,  proxytype=DictProxy)
-    InferenceManager.register('get_shared_memory_config',callable=lambda: shm_config,          proxytype=DictProxy)
-    InferenceManager.register(
-        'get_priority_lane_assignments',
-        callable=lambda: priority_lane_assignments,
-        proxytype=DictProxy,
-    )
-    InferenceManager.register(
-        'get_priority_lane_members',
-        callable=lambda: priority_lane_members,
-        proxytype=DictProxy,
-    )
-    InferenceManager.register('get_priority_lane_lock', callable=lambda: priority_lane_lock)
-    manager = InferenceManager(address=address, authkey=authkey)
-    server = manager.get_server()
-    return server
-
 
 class PoseDetector:
     """YOLOv8-Pose wrapper optimized for production CUDA environments."""
 
-    def __init__(
-        self,
-        model_path: str = None,
-        device: str = "auto",
-        half: bool = True,
-        shared_mode: bool = None,
-    ):
-        self.model_path = model_path or config.YOLO_POSE_MODEL
-        self.device_request = device
-        self.half_request = half
-        self.shared_mode = (
-            shared_mode if shared_mode is not None
-            else getattr(config, "SHARED_INFERENCE_ENABLED", False)
-        )
-
-        self.model = None
-        self.device = None
-        self.use_half = False
-        self.last_results = None
-
-        # Client identity and per-client response queue (shared mode only)
-        self.client_id = f"client_{os.getpid()}_{id(self)}" if self.shared_mode else None
-        self._request_queue = None
-        self._response_queue: Optional[mp.Queue] = None   # OUR private queue
-        self._response_registry = None                     # Manager DictProxy
-        self._priority_registry  = None                     # observability dict
-        self._shm = None
-        self._shm_buf = None
-        self._shm_slot_idx = -1
-        self._shm_slot_size = 0
-        self._request_seq = 0
-
-        # Dual request queues — workers self-route based on FSM state
-        self._scanning_request_queue = None   # Low-priority: idle/background streams
-        self._priority_request_queue = None   # High-priority: active unlocker streams
-        self._priority_request_queues = []    # Sharded priority lanes
-        self._priority_lane_assignments = None
-        self._priority_lane_members = None
-        self._priority_lane_lock = None
-
-        if not self.shared_mode:
-            print(f"[PoseDetector] Initialized in STANDALONE mode (Lazy Load enabled)")
-        else:
-            print(f"[PoseDetector] Initialized in SHARED mode (Client ID: {self.client_id})")
-
-    # ------------------------------------------------------------------
-    # Standalone model loading
-    # ------------------------------------------------------------------
-
-    def _ensure_model_loaded(self):
-        """Lazy-load the YOLO model on first inference call."""
-        if self.model is not None or self.shared_mode:
-            return
-
-        print(f"[PoseDetector] Lazy loading model: {self.model_path}")
-        if self.device_request == "auto":
+    def __init__(self, model_path: str = None, device: str = "auto", half: bool = True):
+        """Load YOLOv8-Pose model with warmup and memory optimizations."""
+        model_path = model_path or config.YOLO_POSE_MODEL
+        if device == "auto":
             self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         else:
-            self.device = self.device_request
+            self.device = device
             if self.device == "cuda" and not torch.cuda.is_available():
                 print("[PoseDetector] CUDA requested but unavailable; falling back to CPU")
                 self.device = "cpu"
 
-        self.use_half = bool(self.half_request and self.device == "cuda")
-
+        self.use_half = bool(half and self.device == "cuda")
+        
         if self.device == "cuda":
+            # Enable cuDNN autotuner for production performance stability
             torch.backends.cudnn.benchmark = True
-            frac = getattr(config, "MAX_PROCESS_VRAM_FRACTION", None)
-            if frac is not None:
+            
+            # Optional memory fraction limit (Production Safety)
+            if hasattr(config, "MAX_PROCESS_VRAM_FRACTION") and config.MAX_PROCESS_VRAM_FRACTION is not None:
                 try:
-                    torch.cuda.set_per_process_memory_fraction(frac, 0)
+                    torch.cuda.set_per_process_memory_fraction(config.MAX_PROCESS_VRAM_FRACTION, 0)
+                    print(f"[PoseDetector] Memory fraction limited to {config.MAX_PROCESS_VRAM_FRACTION}")
                 except Exception as e:
                     print(f"[WARNING] Could not set memory fraction: {e}")
 
-        self.model = YOLO(self.model_path)
+        self.model = YOLO(model_path)
         self.model.to(self.device)
-
+        print(f"[PoseDetector] Model loaded on {self.device} (Half={self.use_half})")
+        
+        # Warmup Phase (Production Stability)
+        # Prevents first-inference latency spikes and initializes allocator pools
         if self.device == 'cuda':
+            print("[PoseDetector] Starting warmup...")
             try:
                 with torch.inference_mode():
-                    dummy = torch.zeros((1, 3, 640, 640), device=self.device)
-                    if self.use_half:
-                        dummy = dummy.half()
-                    for _ in range(2):
-                        self.model(dummy, verbose=False)
+                    dummy_input = torch.zeros((1, 3, 640, 640), device=self.device)
+                    if self.use_half: dummy_input = dummy_input.half()
+                    for _ in range(3):
+                        self.model(dummy_input, verbose=False)
                 torch.cuda.synchronize()
+                print("[PoseDetector] Warmup complete.")
             except Exception as e:
                 print(f"[WARNING] Warmup failed: {e}")
 
-    # ------------------------------------------------------------------
-    # Public inference entry point
-    # ------------------------------------------------------------------
+        self.last_results = None
 
-    def detect(self, frame: np.ndarray, fsm_is_active: bool = False) -> List[Dict]:
-        """Run pose detection — shared mode or standalone.
-
-        fsm_is_active: True when candidate_a, candidate_b, id_a, or id_b is set
-        in the state machine session (i.e., an unlocker interaction is in progress).
-        In shared mode this routes active requests to a pair-sized priority lane
-        so active streams get faster GPU turnaround than idle scanning streams.
+    def detect(self, frame: np.ndarray) -> List[Dict]:
         """
-        if self.shared_mode:
-            return self._detect_shared(frame, fsm_is_active=fsm_is_active)
-
-        self._ensure_model_loaded()
+        Run pose detection with inference_mode and OOM recovery.
+        """
         try:
             with torch.inference_mode():
-                results = self.model(
-                    frame, conf=0.5, verbose=False,
-                    device=self.device, half=self.use_half,
-                )
+                results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
             return self._process_results(results)
         except torch.cuda.OutOfMemoryError:
-            print("[ERROR] CUDA OOM — attempting recovery...")
+            print("[ERROR] CUDA OOM Detected! Attempting recovery...")
             torch.cuda.empty_cache()
+            # Retry once after clearing cache
             try:
                 with torch.inference_mode():
-                    results = self.model(
-                        frame, conf=0.5, verbose=False,
-                        device=self.device, half=self.use_half,
-                    )
+                    results = self.model(frame, conf=0.5, verbose=False, device=self.device, half=self.use_half)
                 return self._process_results(results)
             except Exception as e:
-                print(f"[CRITICAL] OOM recovery failed: {e}")
+                print(f"[CRITICAL] Recovery failed: {e}")
                 return []
         except Exception as e:
             print(f"[ERROR] Inference failed: {e}")
             return []
 
+    def _process_results(self, results) -> List[Dict]:
+        """Convert YOLO results to lightweight detection dictionaries."""
+        detections = []
+        if not results or len(results) == 0:
+            return detections
+
+        result = results[0]
+        if result.boxes is not None and result.keypoints is not None:
+            # Batch CPU transfers to minimize sync points
+            boxes_xyxy = result.boxes.xyxy.cpu().numpy()
+            boxes_conf = result.boxes.conf.cpu().numpy()
+            kpts_xy = result.keypoints.xy.cpu().numpy()
+            kpts_conf = result.keypoints.conf.cpu().numpy()
+
+            for i in range(len(boxes_xyxy)):
+                kpt_array = np.hstack([
+                    kpts_xy[i],
+                    kpts_conf[i].reshape(-1, 1)
+                ])
+
+                detections.append({
+                    "bbox": boxes_xyxy[i],
+                    "confidence": float(boxes_conf[i]),
+                    "keypoints": kpt_array,
+                    "keypoint_names": [
+                        "nose", "left_eye", "right_eye", "left_ear", "right_ear",
+                        "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
+                        "left_wrist", "right_wrist", "left_hip", "right_hip",
+                        "left_knee", "right_knee", "left_ankle", "right_ankle"
+                    ]
+                })
+
+        self.last_results = detections
+        return detections
     # ------------------------------------------------------------------
     # Shared-mode inference — per-client response queue (NEW)
     # ------------------------------------------------------------------

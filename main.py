@@ -13,13 +13,7 @@ import math
 import threading
 import signal
 import subprocess
-from models.pose_detector import (
-    PoseDetector,
-    _InferenceServer,
-    STOP_REQUEST,
-    start_inference_manager,
-    get_shared_queues,
-)
+from models.pose_detector import PoseDetector
 from models.tracker import PersonTracker
 from models.door_verifier import DoorVerifier
 from logic.roi_manager import ROIManager
@@ -32,41 +26,11 @@ from io_.runtime_logger import RuntimeEventLogger
 from io_.terminal_tee import enable_terminal_capture
 import config
 import json
+from io_.frame_timing_tracker import FrameTimingTracker, FrameTimingEvent
 
 # Global reference for cleanup in single-stream mode
 detector = None
 
-def _gpu_server_entry(req_q, response_registry, shm_name,
-                      base_log_dir, device, half, is_priority,
-                      priority_lane=None, preload_on_start=None):
-    """Redirect GPU server stdout/stderr to the standard daily logs.
-    Must be at module level for multiprocessing pickle to work."""
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
-    from models.pose_detector import _InferenceServer
-    from io_.terminal_tee import enable_terminal_capture
-    tier_name = (
-        f"priority_lane_{priority_lane}"
-        if is_priority and priority_lane is not None
-        else ("priority" if is_priority else "scan")
-    )
-    restore_logs = enable_terminal_capture(
-        base_dir=base_log_dir,
-        site_name="gpu_servers",
-        camera_id=".",
-        file_prefix=f"gpu_{tier_name}"
-    )
-    try:
-        _srv = _InferenceServer(device=device, half=half)
-        _srv.run(
-            req_q,
-            response_registry,
-            shm_name,
-            is_priority=is_priority,
-            preload_on_start=preload_on_start,
-            lane_id=priority_lane,
-        )
-    finally:
-        restore_logs()
 
 
 def _start_stream_process(cmd):
@@ -123,6 +87,7 @@ def _stop_gpu_process(proc, timeout=3.0):
     if proc.is_alive() and hasattr(proc, "kill"):
         proc.kill()
         proc.join(timeout=1)
+
 
 
 def _parse_stream_indices(indices_text: str, total_streams: int) -> list:
@@ -603,41 +568,15 @@ def main(
         },
     )
 
-    detector = PoseDetector(device=device, half=half, shared_mode=shared_inference)
-    if shared_inference:
-        (
-            scan_q,
-            priority_q,
-            res_registry,
-            pri_registry,
-            shm_config,
-            priority_queues,
-            priority_lane_assignments,
-            priority_lane_members,
-            priority_lane_lock,
-        ) = get_shared_queues()
-        if scan_q is not None and res_registry is not None:
-            # Inject assigned SHM slot into registry slot_map if provided via CLI
-            if shm_config and 'shm_slot' in stream_config:
-                slot_map = dict(shm_config.get('slot_map', {}))
-                slot_map[detector.client_id] = stream_config['shm_slot']
-                shm_config['slot_map'] = slot_map
-
-            # set_queues creates the private response queue and registers it
-            detector.set_queues(
-                scan_q,
-                priority_q,
-                res_registry,
-                pri_registry,
-                shm_config=shm_config,
-                priority_req_queues=priority_queues,
-                priority_lane_assignments=priority_lane_assignments,
-                priority_lane_members=priority_lane_members,
-                priority_lane_lock=priority_lane_lock,
-            )
-        else:
-            print("[SYSTEM] Shared mode failed to connect. Falling back to standalone.")
-            detector.shared_mode = False
+    # Choose detection backend: batch scheduler or standalone
+    batch_enabled = getattr(config, "BATCH_SCHEDULER_ENABLED", False)
+    if batch_enabled:
+        from io_.batched_pose_detector import BatchedPoseDetector
+        detector = BatchedPoseDetector(device=device, half=half, stream_id=cam_id)
+        print(f"[SYSTEM] Using BATCH SCHEDULER mode for {cam_id}.")
+    else:
+        detector = PoseDetector(device=device, half=half)
+        print(f"[SYSTEM] Using STANDALONE GPU mode for {cam_id}.")
 
     tracker      = PersonTracker()
     roi_manager  = ROIManager()
@@ -872,17 +811,9 @@ def main(
             if shared_inference and detector and not _priority_inference_active:
                 detector.release_priority_lane()
 
-            # Dynamic process_every: full-rate GPU inference during active audit
-            # attempts so initial unlocker contact is not missed.
-            _effective_process_every = (
-                1
-                if _priority_inference_active
-                else process_every
-            )
-
             should_process_frame = (
                 frame_idx == 1
-                or (frame_idx - last_processed_frame_idx) >= _effective_process_every
+                or (frame_idx - last_processed_frame_idx) >= process_every
             )
 
             if should_process_frame:
@@ -892,8 +823,68 @@ def main(
                 t0 = time.perf_counter()
 
                 if tracking_active:
-                    raw_detections = detector.detect(frame, fsm_is_active=_priority_inference_active)
+                    # Timing instrumentation: arrival -> inference start/end -> GPU mem
+                    t_arrival = time.perf_counter()
+                    gpu_before_mb = None
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            gpu_before_mb = float(torch.cuda.memory_allocated()) / (1024.0 * 1024.0)
+                    except Exception:
+                        gpu_before_mb = None
+
+                    t_inf_start = time.perf_counter()
+                    raw_detections = detector.detect(frame)
+                    t_inf_end = time.perf_counter()
+
+                    gpu_after_mb = None
+                    try:
+                        import torch
+                        if torch.cuda.is_available():
+                            gpu_after_mb = float(torch.cuda.memory_allocated()) / (1024.0 * 1024.0)
+                    except Exception:
+                        gpu_after_mb = None
+
                     freeze_fsm_for_timeout = False
+
+                    # Record a summary event for this frame
+                    try:
+                        ft = FrameTimingTracker.instance()
+                        num_persons = None
+                        avg_conf = None
+                        wrist_kps = None
+                        if isinstance(raw_detections, list):
+                            num_persons = len(raw_detections)
+                            confs = []
+                            wrist_kps = 0
+                            for person in raw_detections:
+                                kp = person.get("keypoints") or []
+                                # keypoints entries are (x,y,conf)
+                                for idx in (config.KEYPOINT_WRIST_LEFT, config.KEYPOINT_WRIST_RIGHT):
+                                    if idx < len(kp) and kp[idx][2] > 0.25:
+                                        wrist_kps += 1
+                                # try gather confidences from keypoints if available
+                                for k in kp:
+                                    if len(k) >= 3:
+                                        confs.append(float(k[2]))
+                            if confs:
+                                avg_conf = sum(confs) / len(confs)
+
+                        event = FrameTimingEvent(
+                            frame_idx=frame_idx,
+                            camera_id=cam_id,
+                            t_arrival=t_arrival,
+                            t_inference_start=t_inf_start,
+                            t_inference_end=t_inf_end,
+                            gpu_mem_before_mb=gpu_before_mb,
+                            gpu_mem_after_mb=gpu_after_mb,
+                            num_persons=num_persons,
+                            avg_confidence=avg_conf,
+                            wrist_keypoints=wrist_kps,
+                        )
+                        ft.record_event(event)
+                    except Exception:
+                        pass
 
                     # ----------------------------------------------------------
                     # Inference result handling — three distinct outcomes:
@@ -1504,6 +1495,11 @@ def main(
                     live_window_available = False
 
     print("[SYSTEM] Processing complete.")
+    try:
+        FrameTimingTracker.instance().export_csv()
+        print(f"[SYSTEM] Frame timing CSV exported: logs/frame_timing.csv")
+    except Exception:
+        pass
     print(f"[SYSTEM] Evidence files: {len(os.listdir(evidence_dir))}")
     if 'live_window_available' in locals() and live_window_available:
         cv2.destroyAllWindows()
@@ -1532,7 +1528,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--shared-inference",
         action=argparse.BooleanOptionalAction,
-        default=getattr(config, "SHARED_INFERENCE_ENABLED", False),
+        default=False,
         help="Use the shared scan/priority GPU workers for multi-stream inference.",
     )
     parser.add_argument("--debug", action="store_true")
@@ -1586,6 +1582,15 @@ if __name__ == "__main__":
         else:
             print(f"[SYSTEM] Launching selected streams: {selected_stream_indexes}")
 
+        gpu_mode = getattr(config, "GPU_EXECUTION_MODE", "direct")
+        max_streams_per_gpu = max(int(getattr(config, "MAX_STREAMS_PER_GPU", 1)), 1)
+        extra_launch_delay = float(getattr(config, "EXTRA_STREAM_LAUNCH_DELAY_SECONDS", 0.0))
+        if gpu_mode == "direct" and len(selected_stream_indexes) > max_streams_per_gpu:
+            print(
+                f"[SYSTEM] DIRECT GPU mode is over the soft cap: {len(selected_stream_indexes)} streams > "
+                f"MAX_STREAMS_PER_GPU={max_streams_per_gpu}. Throughput will depend on GPU headroom."
+            )
+
         processes = []
         base_cmd  = [sys.executable, sys.argv[0]]
         if args.show:
@@ -1599,102 +1604,11 @@ if __name__ == "__main__":
         if args.test_window:         base_cmd.extend(["--test-window", args.test_window])
         if args.debug:               base_cmd.append("--debug")
 
-        if args.shared_inference:
-            base_cmd.append("--shared-inference")
-            print("[SYSTEM] Shared Inference mode enabled. Initialising GPU Masters...")
-
-            from multiprocessing.shared_memory import SharedMemory
-            shm_size = getattr(config, "MAX_SHARED_MEMORY_MB", 2048) * 1024 * 1024
-            try:
-                shm = SharedMemory(create=True, size=shm_size)
-                print(f"[SYSTEM] Created {shm_size // (1024*1024)}MB SharedMemory: {shm.name}")
-            except Exception as e:
-                print(f"[SYSTEM] WARNING: Could not create SharedMemory ({e}). Falling back to queue copy.")
-                shm = None
-
-            manager           = mp.Manager()
-            req_q_scan        = manager.Queue()   # Scanning tier: idle/background streams
-            priority_lane_count = max(1, int(getattr(config, "PRIORITY_GPU_SERVER_COUNT", 1)))
-            req_q_priority_lanes = [manager.Queue() for _ in range(priority_lane_count)]
-            req_q_priority    = req_q_priority_lanes[0]   # Backward-compatible primary priority queue
-            response_registry = manager.dict()    # {client_id: private mp.Queue}
-            priority_registry = manager.dict()    # {client_id: "SCANNING"|"ACTIVE"} (observability)
-            priority_lane_assignments = manager.dict()  # {client_id: lane_id}
-            priority_lane_members = manager.dict({
-                lane_id: tuple() for lane_id in range(priority_lane_count)
-            })
-            priority_lane_lock = manager.RLock()
-
-            shm_config = manager.dict({
-                'name':      shm.name if shm else None,
-                'slot_size': shm_size // len(getattr(config, "STREAMS_CONFIG", [1] * 10)),
-                'slot_map':  {},
-            })
-
-            manager_server = start_inference_manager(
-                req_q_scan, req_q_priority,
-                response_registry, priority_registry,
-                shm_config,
-                priority_req_queues=req_q_priority_lanes,
-                priority_lane_assignments=priority_lane_assignments,
-                priority_lane_members=priority_lane_members,
-                priority_lane_lock=priority_lane_lock,
-            )
-            threading.Thread(target=manager_server.serve_forever, daemon=True).start()
-
-            gpu_log_dir = getattr(config, "BASE_LOG_DIR", ".")
-
-            shm_name = shm.name if shm else None
-
-            # SCANNING server — handles all idle/background streams
-            scanning_proc = mp.Process(
-                target=_gpu_server_entry,
-                args=(req_q_scan, response_registry, shm_name,
-                      gpu_log_dir, args.device, not args.no_half, False,
-                      None, getattr(config, "GPU_PRELOAD_ON_START", False)),
-                daemon=True,
-            )
-            scanning_proc.start()
-            print(f"[SYSTEM] GPU SCANNING server active (PID: {scanning_proc.pid}). "
-                  f"Logs under: {os.path.join(gpu_log_dir, 'gpu_servers')}")
-
-            # PRIORITY lanes — active streams claim/release pair-sized GPU lanes dynamically.
-            priority_procs = []
-            preload_lanes = max(0, int(getattr(config, "PRIORITY_PRELOAD_LANES", 0)))
-            for lane_id, lane_queue in enumerate(req_q_priority_lanes):
-                preload_lane = (
-                    getattr(config, "GPU_PRELOAD_ON_START", False)
-                    and lane_id < preload_lanes
-                )
-                priority_proc = mp.Process(
-                    target=_gpu_server_entry,
-                    args=(lane_queue, response_registry, shm_name,
-                          gpu_log_dir, args.device, not args.no_half, True,
-                          lane_id, preload_lane),
-                    daemon=True,
-                )
-                priority_proc.start()
-                priority_procs.append(priority_proc)
-                warm_state = "preloaded" if preload_lane else "lazy"
-                print(
-                    f"[SYSTEM] GPU PRIORITY lane {lane_id} active "
-                    f"(PID: {priority_proc.pid}, {warm_state}). "
-                    f"Logs under: {os.path.join(gpu_log_dir, 'gpu_servers')}"
-                )
-
-            print(
-                f"[SYSTEM] Shared GPU Masters active: 1 scanning server + "
-                f"{priority_lane_count} priority lane(s), "
-                f"{getattr(config, 'PRIORITY_STREAMS_PER_SERVER', 2)} active stream(s) per lane. "
-                f"Per-client routing enabled for {len(selected_stream_indexes)} streams."
-            )
-        else:
-            base_cmd.append("--no-shared-inference")
+        # Shared inference removed; use standalone process-per-stream execution
+        base_cmd.append("--no-shared-inference")
 
         for pos, i in enumerate(selected_stream_indexes):
             cmd = base_cmd + ["--stream-index", str(i)]
-            if args.shared_inference and shm:
-                cmd.extend(["--shm-slot", str(pos)])
             stream_video_source = stream_video_sources.get(i)
             if stream_video_source is not None:
                 cmd.append(stream_video_source)
@@ -1710,6 +1624,8 @@ if __name__ == "__main__":
 
             if pos < len(selected_stream_indexes) - 1:
                 delay = getattr(config, "STAGGER_START_DELAY", 2.0)
+                if gpu_mode == "direct" and pos + 1 >= max_streams_per_gpu:
+                    delay = max(delay, extra_launch_delay)
                 print(f"[SYSTEM] Waiting {delay}s before next launch...")
                 time.sleep(delay)
 
@@ -1748,40 +1664,8 @@ if __name__ == "__main__":
             try:
                 for entry in processes:
                     _terminate_stream_process(entry["process"])
-                if args.shared_inference:
-                    print("[SYSTEM] Shutting down GPU Masters...")
-                    shutdown_queues = [locals().get("req_q_scan")]
-                    shutdown_queues.extend(locals().get("req_q_priority_lanes", []))
-                    for _queue in shutdown_queues:
-                        if _queue is not None:
-                            try:
-                                _queue.put(STOP_REQUEST)
-                            except Exception:
-                                pass
-                    gpu_processes = [("scanning", locals().get("scanning_proc"))]
-                    gpu_processes.extend(
-                        (f"priority_lane_{idx}", proc)
-                        for idx, proc in enumerate(locals().get("priority_procs", []))
-                    )
-                    for _proc_name, _proc in gpu_processes:
-                        _stop_gpu_process(_proc)
-                    if 'manager' in locals() and manager is not None:
-                        try:
-                            manager.shutdown()
-                        except Exception:
-                            pass
+                # No shared GPU masters to shutdown in standalone mode
             finally:
-                if 'shm' in locals() and shm:
-                    try:
-                        shm.close()
-                    except Exception:
-                        pass
-                    try:
-                        shm.unlink()
-                    except FileNotFoundError:
-                        pass
-                    except Exception as exc:
-                        print(f"[SYSTEM] WARNING: Could not unlink SharedMemory: {exc}")
                 signal.signal(signal.SIGINT, previous_sigint_handler)
         sys.exit(0)
 
