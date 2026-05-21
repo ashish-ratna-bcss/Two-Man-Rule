@@ -531,16 +531,9 @@ def main(
         },
     )
 
-    # Each stream runs in its own subprocess — direct synchronous inference, no queue, no latency.
-    # BatchedPoseDetector/GPUBatchCoordinator are only relevant for legacy multi-stream
-    # single-process mode (shared_inference=True).
-    if shared_inference:
-        from io_.batched_pose_detector import BatchedPoseDetector
-        detector = BatchedPoseDetector(device=device, half=half, stream_id=cam_id)
-        print(f"[SYSTEM] Using BATCH SCHEDULER mode for {cam_id}.")
-    else:
-        detector = PoseDetector(device=device, half=half)
-        print(f"[SYSTEM] Using DIRECT INFERENCE mode for {cam_id}.")
+    # Detector is lazy-loaded on first tracking activation (presence detected / door triggered).
+    # No YOLO model loaded at startup — zero GPU VRAM outside active windows.
+    detector = None
 
     tracker      = PersonTracker()
     roi_manager  = ROIManager()
@@ -681,6 +674,7 @@ def main(
         door_transition_pending      = False
         tracking_active              = False
         presence_triggered           = False
+        _presence_scan_count         = 0
         persons_auth_status          = None
         auth_check_complete          = False
         stream_priority_active       = False
@@ -722,6 +716,7 @@ def main(
                 active_auth_window            = None
                 evening_auth_started          = False
                 presence_triggered            = False
+                _presence_scan_count          = 0
                 stream_priority_active        = False
                 last_priority_activity_frame  = 0
                 lkg_detections                = []
@@ -754,6 +749,7 @@ def main(
                 state_machine.reset_session()
                 evening_auth_started   = False
                 presence_triggered     = False
+                _presence_scan_count   = 0
                 stream_priority_active = False
                 last_priority_activity_frame = 0
                 if shared_inference and detector:
@@ -771,6 +767,13 @@ def main(
                 active_auth_window = current_auth_window
 
             auth_window_open = current_auth_window is not None
+
+            # Outside any auth window: keep RTSP alive, do nothing else
+            if not auth_window_open and not debug and not show_all_detections:
+                if total_frames <= 0:  # live RTSP: sleep between ticks
+                    time.sleep(0.5)
+                continue
+
             auth_tracking_allowed = (
                 current_auth_window == "morning"
                 or (current_auth_window == "evening" and evening_auth_started)
@@ -788,15 +791,16 @@ def main(
                     _scan_gray = cv2.cvtColor(
                         clean_frame[_by1:_by2, _bx1:_bx2], cv2.COLOR_BGR2GRAY
                     )
-                    _lr = 0.1 if frame_idx <= PRESENCE_WARMUP_FRAMES else 0.005
+                    _lr = 0.1 if _presence_scan_count <= PRESENCE_WARMUP_FRAMES else 0.005
                     _fg = presence_bg.apply(_scan_gray, learningRate=_lr)
+                    _presence_scan_count += 1
                     if (
-                        frame_idx > PRESENCE_WARMUP_FRAMES
+                        _presence_scan_count > PRESENCE_WARMUP_FRAMES
                         and cv2.countNonZero(_fg) > PRESENCE_PIXEL_THRESHOLD
                     ):
                         presence_triggered = True
                         print(
-                            f"[{cam_id}] Person presence detected (frame {frame_idx}). "
+                            f"[{cam_id}] Person presence detected (scan {_presence_scan_count}). "
                             f"Starting morning inference."
                         )
                 scanner_inference_active = presence_triggered or debug or show_all_detections
@@ -836,6 +840,17 @@ def main(
                 t0 = time.perf_counter()
 
                 if tracking_active:
+                    # Lazy-load detector on first activation (presence detected / door triggered).
+                    # Zero GPU VRAM is consumed outside active inference windows.
+                    if detector is None:
+                        if shared_inference:
+                            from io_.batched_pose_detector import BatchedPoseDetector
+                            detector = BatchedPoseDetector(device=device, half=half, stream_id=cam_id)
+                            print(f"[{cam_id}] Detector loaded: BATCH SCHEDULER mode.")
+                        else:
+                            detector = PoseDetector(device=device, half=half)
+                            print(f"[{cam_id}] Detector loaded: DIRECT INFERENCE mode.")
+
                     # Timing instrumentation: arrival -> inference start/end -> GPU mem
                     t_arrival = time.perf_counter()
                     gpu_before_mb = None
