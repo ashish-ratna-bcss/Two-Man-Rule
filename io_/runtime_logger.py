@@ -64,8 +64,9 @@ class RuntimeEventLogger:
         level: str = "INFO",
         details: Optional[Dict[str, Any]] = None,
         frame_idx: Optional[int] = None,
+        ts_ist: Optional[datetime] = None,
     ) -> bool:
-        ts_ist = datetime.now(IST)
+        ts_ist = ts_ist if ts_ist is not None else datetime.now(IST)
         try:
             self._open_for_datetime(ts_ist)
             payload = {

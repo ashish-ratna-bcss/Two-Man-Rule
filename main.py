@@ -419,9 +419,12 @@ def capture(
     persons_auth_status=None,
     runtime_logger: RuntimeEventLogger = None,
     frame_idx: int = None,
+    frame_ist: datetime = None,
 ):
     """Unified capture + log helper. Saves annotated frame + paired JSON metadata."""
-    now_ist  = datetime.now(IST)
+    # Pin timestamp to when the frame was read from the video, not when processing finished.
+    # Inference + FSM lag can be 20ms–8s; using frame_ist keeps the alert time accurate.
+    now_ist  = frame_ist if frame_ist is not None else datetime.now(IST)
     date_str = now_ist.strftime("%d-%m-%Y")
     time_str = now_ist.strftime("%H-%M-%S")
 
@@ -466,7 +469,6 @@ def capture(
         print(f"[ERROR] Failed to save JSON metadata: {e}")
         json_ok = False
 
-    alert_system.log_event(event_type, details or {})
     if runtime_logger is not None:
         runtime_logger.write_event(
             event_type="CAPTURE",
@@ -485,6 +487,7 @@ def capture(
                 "event_details":     details or {},
             },
             frame_idx=frame_idx,
+            ts_ist=now_ist,
         )
     print(
         f"[CAPTURE] {event_type}: {full_path} "
@@ -1203,6 +1206,7 @@ def main(
                     persons_auth_status=persons_auth_status,
                     runtime_logger=runtime_logger,
                     frame_idx=frame_idx,
+                    frame_ist=now_ist,
                 )
 
             if tracking_active and should_process_frame and occupancy_status == "VIOLATION_OVERCROWD":
@@ -1417,11 +1421,6 @@ def main(
                 and auth_result["authorized"]
                 and not auth_success_logged_by_window.get(active_auth_window, False)
             ):
-                alert_system.log_event("DUAL_AUTH_SUCCESS", {
-                    "window": active_auth_window,
-                    "p1_id":  state_machine.session.get("id_a"),
-                    "p2_id":  state_machine.session.get("id_b"),
-                })
                 auth_success_logged_by_window[active_auth_window] = True
                 runtime_logger.write_event(
                     event_type="DUAL_AUTH_SUCCESS",
@@ -1433,6 +1432,7 @@ def main(
                         "p2_id":  state_machine.session.get("id_b"),
                     },
                     frame_idx=frame_idx,
+                    ts_ist=now_ist,
                 )
                 print(f"[SYSTEM] Dual person authorization confirmed for {active_auth_window} window.")
 
