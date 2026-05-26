@@ -177,6 +177,30 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
         }
     },
+    # Stream 2 - additional Somajiguda stream
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8004/Streaming/Channels/301",
+        "camera_id": "TF-1-CAM-03",
+        "site_id": "1",
+        "site_name": "somajiguda",
+        "closed_door_reference": "close_doors/closed_TF-1-CAM-03.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(2695.7683372532724, 449.2897989300864), (2689.3931009038906, 550.1125226621584), (2518.2069728832303, 509.9723271262794), (2530.012912746724, 404.89946234118446)], np.int32),
+            "LOCKS_ROI": np.array([(2427.301235934328, 51.42962553034492), (2744.961941161355, 90.19527235354568), (2712.0739658273365, 384.8715313463512), (2395.425198302895, 326.50802434975077)], np.int32),
+            "DOOR_ROI": np.array([(2755.4860932682404, 6.002055498458372), (2693.6566996402858, 504.5837615621785), (2355.568313206576, 417.7595066803697), (2402.9269976875626, 4.6865364850976325)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(2509.4705485611494, 3.0252720900202896), (2576.7644057830644, 4.205866076369671), (2507.1093605884507, 34.901309721453586)], np.int32),
+            "INTERACTION_ZONE": np.array([(15.347721822541956, 11.289429994465959), (3830.520491694877, 11.595429538721955), (3804.3462345508183, 2130.4556354916053), (41.43884892086331, 2129.7841726618703)], np.int32)
+        }
+    },
     # Stream 2
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
@@ -326,6 +350,31 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([[1587, 576], [2035, 815], [1947, 980], [1480, 716]], np.int32),
             "DOOR_ROI": np.array([[1750, 5], [1563, 550], [2095, 801], [2460, 5]], np.int32),
             "INTERACTION_ZONE": np.array([[0, 5], [3, 224], [1369, 1520], [2685, 1511], [2688, 5]], np.int32)
+        }
+    }
+    ,
+    # Stream 8 - additional Jubilee Hills stream
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8002/Streaming/Channels/1101",
+        "camera_id": "FF-2-CAM-11",
+        "site_id": "2",
+        "site_name": "jubilee_hills",
+        "closed_door_reference": "close_doors/closed_FF-2-CAM-11.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "LOCKS_ROI": np.array([(552, 475), (1212, 240), (1240, 909), (669, 1163)], np.int32),
+            "DOOR_ROI": np.array([(330, 113), (634, 0), (1217, 0), (1221, 877), (615, 1168)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[488, 113], [493, 172], [609, 72]], np.int32),
+            "STANDING_ZONE": np.array([[688, 1178], [1227, 918], [1420, 1118], [929, 1416]], np.int32),
+            "INTERACTION_ZONE": np.array([[6, 11], [2615, 0], [1927, 1511], [25, 1508]], np.int32)
         }
     }
 ]
