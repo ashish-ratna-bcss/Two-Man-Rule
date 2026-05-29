@@ -697,7 +697,7 @@ def main(
         processed_frames_count = 0
 
         while True:
-            ret, frame = video.read_frame(block=True, timeout=0.1)
+            ret, frame, frame_ist = video.read_frame(block=True, timeout=0.1)
             if not ret:
                 if stream_config.get("camera_id"):
                     print(f"[SYSTEM] Stream {stream_config['camera_id']} died. Exiting for restart.")
@@ -709,7 +709,9 @@ def main(
             frame_idx  += 1
 
             # ===== IST TIME & DAILY RESET =====
-            now_ist    = datetime.now(IST)
+            # now_ist is pinned at cap.read() grab time inside VideoHandler.
+            # Falls back to wall-clock only if grab timestamp missing.
+            now_ist    = frame_ist if frame_ist is not None else datetime.now(IST)
             today_str  = now_ist.strftime("%Y-%m-%d")
             if last_reset_date != today_str:
                 print(f"[SYSTEM] Midnight reset for {today_str} IST.")
