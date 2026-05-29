@@ -402,8 +402,8 @@ STREAMS_CONFIG = [
             "DOOR_CORNER_ROI": np.array([(1129, 158), (1262, 56), (1269, 120), (1132, 246)], np.int32)
         }
     }
-    ,
-    # Stream 11 - Khammam
+        ,
+        # Stream 11 - Khammam
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.113.18:8001/Streaming/Channels/3101",
         "camera_id": "GF-30-CAM-31",
