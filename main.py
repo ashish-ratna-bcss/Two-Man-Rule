@@ -13,8 +13,12 @@ import math
 import threading
 import signal
 import subprocess
-from models.pose_detector import PoseDetector
-from models.tracker import PersonTracker
+import re
+# Heavy torch-backed imports (PoseDetector, PersonTracker) are deferred into
+# main() so the process holds ZERO GPU VRAM until its window starts. Keeping
+# them at module top would trigger torch/ultralytics/supervision import on
+# every spawn, which initializes the CUDA driver context and reserves
+# ~50–500 MiB even while idle.
 from models.door_verifier import DoorVerifier
 from logic.roi_manager import ROIManager
 from logic.state_machine import DualAuthStateMachine
@@ -163,6 +167,24 @@ class _NumpySafeEncoder(json.JSONEncoder):
 CALIBRATED_W, CALIBRATED_H = 2688, 1520
 
 _alert_counter = [0]  # mutable so capture() can increment across calls
+
+
+def _install_term_handler():
+    """Child process SIGTERM/SIGINT → flush stdio, exit 0.
+
+    Supervisor sends SIGTERM via process group when shutting down. Without a
+    handler the default action kills the process mid-loop, leaving partial
+    log lines and an undefined VideoHandler / detector. Handler raises
+    SystemExit so the `with VideoHandler(...)` __exit__ + finally blocks run.
+    """
+    def _handler(signum, _frame):
+        print(f"[SYSTEM] Received signal {signum}. Exiting cleanly.")
+        sys.exit(0)
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(_sig, _handler)
+        except Exception:
+            pass
 
 
 def _scale_polygon(points: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -507,13 +529,32 @@ def main(
     show_all_detections: bool = False,
     test_window: str = None,
     debug: bool = False,
-    shared_inference: bool = False,
 ):
     global detector
+    _install_term_handler()
     video_source = video_source or stream_config["rtsp_url"]
     cam_id       = stream_config["camera_id"]
     site_name    = stream_config["site_name"]
+
+    # Strict window-gated startup. Done FIRST, before any RTSP open / log file /
+    # torch import. Zero file handles, zero RTSP socket, zero VRAM until the
+    # window is imminent. test_window / debug / show_all_detections bypass.
+    if not test_window and not debug and not show_all_detections:
+        secs_to_window = _seconds_until_next_window()
+        if secs_to_window > 30.0:
+            print(
+                f"[SYSTEM] {cam_id}: outside auth window. Sleeping {secs_to_window:.0f}s "
+                f"before opening RTSP + loading torch. Zero VRAM held."
+            )
+            time.sleep(secs_to_window)
+
     evidence_dir = os.path.join(config.BASE_OUTPUT_DIR, site_name, cam_id)
+
+    # Window is imminent / open. Now import torch-backed modules. This is the
+    # first place CUDA driver may initialize for this process.
+    from models.pose_detector import PoseDetector
+    from models.tracker import PersonTracker
+
     runtime_logger = RuntimeEventLogger(
         base_dir=config.BASE_LOG_DIR,
         site_name=site_name,
@@ -523,12 +564,14 @@ def main(
     print(f"[SYSTEM] Initializing Two-Man Rule Monitoring System for {site_name} - {cam_id}...")
     _alert_counter[0] = 0
     os.makedirs(evidence_dir, exist_ok=True)
+    # Redact RTSP password before persisting to JSONL.
+    _safe_video_source = re.sub(r"://[^@/]+:[^@/]+@", "://***:***@", str(video_source))
     runtime_logger.write_event(
         event_type="STREAM_START",
         message="Stream worker initialized",
         level="INFO",
         details={
-            "video_source": str(video_source),
+            "video_source": _safe_video_source,
             "evidence_dir": evidence_dir,
             "log_file":     runtime_logger.current_file_path,
         },
@@ -757,8 +800,6 @@ def main(
                 _presence_scan_count   = 0
                 stream_priority_active = False
                 last_priority_activity_frame = 0
-                if shared_inference and detector:
-                    detector.release_priority_lane()
                 tracked_persons        = {}
                 occupancy_status       = "OK"
                 lkg_detections         = []
@@ -830,8 +871,6 @@ def main(
             _priority_inference_active = scanner_inference_active and auth_tracking_allowed and (
                 stream_priority_active or _fsm_active
             )
-            if shared_inference and detector and not _priority_inference_active:
-                detector.release_priority_lane()
 
             should_process_frame = (
                 frame_idx == 1
@@ -848,13 +887,8 @@ def main(
                     # Lazy-load detector on first activation (presence detected / door triggered).
                     # Zero GPU VRAM is consumed outside active inference windows.
                     if detector is None:
-                        if shared_inference:
-                            from io_.batched_pose_detector import BatchedPoseDetector
-                            detector = BatchedPoseDetector(device=device, half=half, stream_id=cam_id)
-                            print(f"[{cam_id}] Detector loaded: BATCH SCHEDULER mode.")
-                        else:
-                            detector = PoseDetector(device=device, half=half)
-                            print(f"[{cam_id}] Detector loaded: DIRECT INFERENCE mode.")
+                        detector = PoseDetector(device=device, half=half)
+                        print(f"[{cam_id}] Detector loaded: DIRECT INFERENCE mode.")
 
                     # Timing instrumentation: arrival -> inference start/end -> GPU mem
                     t_arrival = time.perf_counter()
@@ -1027,8 +1061,6 @@ def main(
                             inactive_frames = frame_idx - last_priority_activity_frame
                             if inactive_frames >= priority_activity_grace_frames:
                                 stream_priority_active = False
-                                if shared_inference and detector:
-                                    detector.release_priority_lane()
                                 print(
                                     f"[{cam_id}] Priority activity idle for "
                                     f"{inactive_frames / max(fps, 1):.1f}s. Returning to SCANNER."
@@ -1067,8 +1099,7 @@ def main(
                     timeout_tag = f" | LKG timeouts: {lkg_consecutive_timeouts}" if lkg_consecutive_timeouts else ""
                     print(
                         f"[METRICS] {cam_id} | FPS: {actual_fps:.1f} | AI: {inference_ms:.1f}ms | "
-                        f"Queue Delay: {telemetry['queue_delay_ms']:.1f}ms | "
-                        f"Drops: {telemetry['dropped_frames']}{timeout_tag}"
+                        f"Reconnects: {telemetry['reconnect_count']}{timeout_tag}"
                     )
                     t_loop_start           = time.perf_counter()
                     processed_frames_count = 0
@@ -1235,8 +1266,6 @@ def main(
                     evening_check_done   = True
                     evening_auth_started = False
                     stream_priority_active = False
-                    if shared_inference and detector:
-                        detector.release_priority_lane()
                     print("[EVENING] Dual Auth FAILED: Same person attempted both unlocks.")
                     state_machine.session["violation_type"] = None
                     auth_check_complete = True
@@ -1245,8 +1274,6 @@ def main(
                     if is_door_open:
                         morning_check_done = True
                         stream_priority_active = False
-                        if shared_inference and detector:
-                            detector.release_priority_lane()
                         print("[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
                         state_machine.session["violation_type"] = None
                         auth_check_complete = True
@@ -1288,8 +1315,6 @@ def main(
                         state_machine.session["door_open_captured"] = True
                         morning_check_done = True
                         stream_priority_active = False
-                        if shared_inference and detector:
-                            detector.release_priority_lane()
                         auth_check_complete = True
                         break
                     else:
@@ -1307,8 +1332,6 @@ def main(
                     state_machine.session["door_open_captured"] = True
                     morning_check_done = True
                     stream_priority_active = False
-                    if shared_inference and detector:
-                        detector.release_priority_lane()
                     auth_check_complete = True
                     break
 
@@ -1361,8 +1384,6 @@ def main(
                         evening_check_done   = True
                         evening_auth_started = False
                         stream_priority_active = False
-                        if shared_inference and detector:
-                            detector.release_priority_lane()
                         auth_check_complete = True
                         break
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
@@ -1378,8 +1399,6 @@ def main(
                         evening_check_done   = True
                         evening_auth_started = False
                         stream_priority_active = False
-                        if shared_inference and detector:
-                            detector.release_priority_lane()
                         auth_check_complete = True
                         break
                     else:
@@ -1488,8 +1507,9 @@ def main(
 
     print("[SYSTEM] Processing complete.")
     try:
-        FrameTimingTracker.instance().export_csv()
-        print(f"[SYSTEM] Frame timing CSV exported: logs/frame_timing.csv")
+        ft_path = f"logs/frame_timing_{cam_id}.csv"
+        FrameTimingTracker.instance().export_csv(ft_path)
+        print(f"[SYSTEM] Frame timing CSV exported: {ft_path}")
     except Exception:
         pass
     print(f"[SYSTEM] Evidence files: {len(os.listdir(evidence_dir))}")
@@ -1497,7 +1517,11 @@ def main(
         cv2.destroyAllWindows()
 
     if auth_check_complete:
-        # Release YOLO model from GPU before sleeping for hours until next window
+        # Hard-release GPU by exiting the process. empty_cache() does NOT free
+        # the CUDA context, cuDNN workspace, or cuBLAS handles — only process
+        # exit does (driver tears down ctx). Supervisor / outer loop respawns
+        # a fresh child near the next window, which re-enters the pre-window
+        # sleep above and holds zero VRAM until then.
         detector = None
         try:
             import torch
@@ -1507,8 +1531,11 @@ def main(
             pass
 
         sleep_secs = _seconds_until_next_window()
-        print(f"[SYSTEM] Auth check complete. Releasing GPU. Sleeping {sleep_secs:.0f}s until next window.")
-        time.sleep(sleep_secs)
+        print(
+            f"[SYSTEM] Auth check complete. Exiting to fully release CUDA context. "
+            f"Next window in {sleep_secs:.0f}s; supervisor will respawn."
+        )
+        sys.exit(0)
 
     return auth_check_complete
 
@@ -1533,12 +1560,6 @@ if __name__ == "__main__":
     parser.add_argument("--no-half", action="store_true")
     parser.add_argument("--show-all-detections", action="store_true")
     parser.add_argument("--test-window", type=str, choices=["morning", "evening"], default=None)
-    parser.add_argument(
-        "--shared-inference",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use the shared scan/priority GPU workers for multi-stream inference.",
-    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--shm-slot", type=int, default=-1)
     args = parser.parse_args()
@@ -1590,13 +1611,12 @@ if __name__ == "__main__":
         else:
             print(f"[SYSTEM] Launching selected streams: {selected_stream_indexes}")
 
-        gpu_mode = getattr(config, "GPU_EXECUTION_MODE", "direct")
         max_streams_per_gpu = max(int(getattr(config, "MAX_STREAMS_PER_GPU", 1)), 1)
         extra_launch_delay = float(getattr(config, "EXTRA_STREAM_LAUNCH_DELAY_SECONDS", 0.0))
-        if gpu_mode == "direct" and len(selected_stream_indexes) > max_streams_per_gpu:
+        if len(selected_stream_indexes) > max_streams_per_gpu:
             print(
-                f"[SYSTEM] DIRECT GPU mode is over the soft cap: {len(selected_stream_indexes)} streams > "
-                f"MAX_STREAMS_PER_GPU={max_streams_per_gpu}. Throughput will depend on GPU headroom."
+                f"[SYSTEM] Over the soft cap: {len(selected_stream_indexes)} streams > "
+                f"MAX_STREAMS_PER_GPU={max_streams_per_gpu}. Throughput depends on GPU headroom."
             )
 
         processes = []
@@ -1611,9 +1631,6 @@ if __name__ == "__main__":
         if args.show_all_detections: base_cmd.append("--show-all-detections")
         if args.test_window:         base_cmd.extend(["--test-window", args.test_window])
         if args.debug:               base_cmd.append("--debug")
-
-        # Shared inference removed; use standalone process-per-stream execution
-        base_cmd.append("--no-shared-inference")
 
         for pos, i in enumerate(selected_stream_indexes):
             cmd = base_cmd + ["--stream-index", str(i)]
@@ -1632,7 +1649,7 @@ if __name__ == "__main__":
 
             if pos < len(selected_stream_indexes) - 1:
                 delay = getattr(config, "STAGGER_START_DELAY", 2.0)
-                if gpu_mode == "direct" and pos + 1 >= max_streams_per_gpu:
+                if pos + 1 >= max_streams_per_gpu:
                     delay = max(delay, extra_launch_delay)
                 print(f"[SYSTEM] Waiting {delay}s before next launch...")
                 time.sleep(delay)
@@ -1699,51 +1716,38 @@ if __name__ == "__main__":
                 f"from video source '{video_source}'."
             )
 
-    _is_live = _video_source_is_live(video_source)
-
-    while True:
-        _restore_terminal_capture = enable_terminal_capture(
-            base_dir=config.BASE_LOG_DIR,
-            site_name=stream_config["site_name"],
-            camera_id=stream_config["camera_id"],
-        )
-        should_sleep_before_restart = False
+    # Single-stream invocation: run one window cycle then exit. Supervisor (or
+    # systemd / cron) is responsible for respawn. main() handles its own
+    # pre-window sleep and calls sys.exit(0) on auth completion, which would
+    # break a Python-level `while True` anyway, so no restart loop here.
+    _restore_terminal_capture = enable_terminal_capture(
+        base_dir=config.BASE_LOG_DIR,
+        site_name=stream_config["site_name"],
+        camera_id=stream_config["camera_id"],
+    )
+    exit_code = 0
+    try:
         try:
-            try:
-                auth_complete = main(
-                    stream_config=stream_config,
-                    video_source=video_source,
-                    show_live=args.show,
-                    scale_rois=args.scale_rois,
-                    process_every=args.process_every,
-                    device=args.device,
-                    half=not args.no_half,
-                    show_all_detections=args.show_all_detections,
-                    test_window=args.test_window,
-                    debug=args.debug,
-                    shared_inference=args.shared_inference,
-                )
-            except KeyboardInterrupt:
-                print("\n[SYSTEM] Interrupted by user. Exiting.")
-                break
-            except Exception as exc:
-                print(f"[SYSTEM] Unhandled exception in main(): {exc}")
-                import traceback; traceback.print_exc()
-                auth_complete = False
-
-            if not _is_live:
-                break
-
-            if auth_complete:
-                # main() already slept until next window; restart immediately
-                print("[SYSTEM] Auth complete. Restarting for next window.")
-            else:
-                print("[SYSTEM] Restarting stream in 10 seconds...")
-                should_sleep_before_restart = True
-        finally:
-            if args.shared_inference and detector:
-                detector.cleanup()
-            _restore_terminal_capture()
-
-        if should_sleep_before_restart:
-            time.sleep(10)
+            main(
+                stream_config=stream_config,
+                video_source=video_source,
+                show_live=args.show,
+                scale_rois=args.scale_rois,
+                process_every=args.process_every,
+                device=args.device,
+                half=not args.no_half,
+                show_all_detections=args.show_all_detections,
+                test_window=args.test_window,
+                debug=args.debug,
+            )
+        except KeyboardInterrupt:
+            print("\n[SYSTEM] Interrupted by user. Exiting.")
+        except SystemExit:
+            raise
+        except Exception as exc:
+            print(f"[SYSTEM] Unhandled exception in main(): {exc}")
+            import traceback; traceback.print_exc()
+            exit_code = 1
+    finally:
+        _restore_terminal_capture()
+    sys.exit(exit_code)

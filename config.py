@@ -79,34 +79,11 @@ RTSP_LOW_LATENCY = True
 PRESERVE_FILE_FRAMES = True       # Offline videos are read sequentially with no frame overwrite/drop.
 RTSP_PREFER_REALTIME = True       # Live RTSP keeps latest frame to avoid latency buildup.
 STAGGER_START_DELAY = 2.0  # Seconds between stream launches
-MAX_PROCESS_VRAM_FRACTION = None  # Optional: e.g. 0.3 to limit each process
+# Cap each child process to a fraction of total VRAM so one leaky stream
+# cannot OOM siblings. YOLOv8n-pose @ FP16 ~720 MiB; 0.08 × 32 GB = ~2.5 GB
+# leaves 3× headroom for activation spikes.
+MAX_PROCESS_VRAM_FRACTION = 0.08
 
-
-# ============ GPU INFERENCE MODE ============
-# Direct mode: each stream loads its own model (no contention but high VRAM).
-# Batch mode: all streams share one GPU worker running on fixed cadence (lower VRAM, zero latency increase).
-GPU_EXECUTION_MODE = "batch"  # "direct" or "batch"
-
-# ============ ZERO-LATENCY BATCH SCHEDULER (Testing Mode) ============
-# Enable batch scheduler for predictable, no-latency multi-stream inference.
-# Rule: 2 streams per batch = 1 stream latency (GPU batching hides the 2nd stream overhead).
-BATCH_SCHEDULER_ENABLED = True
-
-# Batch size: 2 streams per inference pass (1-to-1 parity with standalone latency).
-BATCH_SIZE = 2
-
-# Fixed cadence in ms. With 2-stream batches, ~50ms keeps frames flowing nicely (~20 FPS batch rate).
-# Adjust downward for higher throughput, upward for more breathing room.
-BATCH_INFERENCE_CADENCE_MS = 50.0
-
-# GPU memory pre-allocation (MB). 1GB safe for most GPUs; reduce to 512 for RTX4060.
-BATCH_GPU_PREALLOCATE_MB = 1024.0
-
-# Per-stream input queue: max frames buffered before dropping oldest.
-BATCH_INPUT_QUEUE_SIZE = 5
-
-# Per-stream output queue: max results buffered before dropping oldest.
-BATCH_OUTPUT_QUEUE_SIZE = 10
 
 # ============ PRESENCE DETECTION (morning window lazy-trigger) ============
 # Background subtractor (MOG2) warmup in seconds — converted to frames using actual stream FPS

@@ -39,8 +39,6 @@ class VideoHandler:
         # Telemetry
         self.reconnect_count = 0
         self.last_frame_time = 0.0
-        self.dropped_frames = 0  # always 0; kept for API stability
-        self.queue_delay = 0.0   # always 0; kept for API stability
 
         # Latest pinned IST timestamp (set in read_frame).
         self.frame_ist: Optional[datetime] = None
@@ -164,9 +162,7 @@ class VideoHandler:
 
     def get_telemetry(self) -> dict:
         return {
-            "dropped_frames": self.dropped_frames,
             "reconnect_count": self.reconnect_count,
-            "queue_delay_ms": 0.0,
             "frame_idx": self.current_frame_idx,
         }
 

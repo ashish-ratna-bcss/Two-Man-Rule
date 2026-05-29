@@ -37,7 +37,15 @@ class FrameTimingTracker:
     def record_event(self, event: FrameTimingEvent):
         self.events.append(event)
 
-    def export_csv(self, path: str = "logs/frame_timing.csv"):
+    def export_csv(self, path: str = None):
+        # Per-camera path to avoid multi-stream truncation races on the shared CSV.
+        if path is None:
+            cam = "default"
+            for e in self.events:
+                if getattr(e, "camera_id", None):
+                    cam = str(e.camera_id)
+                    break
+            path = f"logs/frame_timing_{cam}.csv"
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=list(asdict(self.events[0]).keys()) if self.events else [
