@@ -399,6 +399,8 @@ STREAMS_CONFIG = [
     }
     ,
     #Andhra Pradesh streams Below
+
+    
     # Stream 8
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.76.17:8001/Streaming/Channels/2001",
@@ -452,6 +454,167 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "DOOR_CORNER_ROI": np.array([(1091, 5), (1110, 373), (1671, 607), (1737, 11)], np.int32),
             "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
+        }
+    },
+    # Stream 10 - Guntur
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@49.205.164.154:8001/Streaming/Channels/1901",
+        "camera_id": "GF-19-CAM-19",
+        "site_id": "19",
+        "site_name": "guntur-store",
+        "closed_door_reference": "close_doors/closed_GF-19-CAM-19.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([[1914, 4], [1901, 52], [2084, 4]], np.int32),
+            "INTERACTION_ZONE": np.array([[29, 14], [2639, 19], [2649, 1477], [39, 1487]], np.int32),
+            "LOCKS_ROI": np.array([[2294, 461], [1833, 140], [1667, 524], [2056, 835]], np.int32),
+            "DOOR_ROI": np.array([[1867, 19], [2494, 189], [1925, 1054], [1453, 646]], np.int32),
+            "STANDING_ZONE": np.array([[1638, 646], [1419, 811], [1764, 1156], [1964, 947]], np.int32)
+        }
+    },
+    # Stream 11 - Kakinada
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.145.50:8001/Streaming/Channels/1501",
+        "camera_id": "GF-22-CAM-15",
+        "site_id": "22",
+        "site_name": "kakinada-store",
+        "closed_door_reference": "close_doors/closed_GF-22-CAM-15.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "LOCKS_ROI": np.array([[2366, 483], [3161, 770], [2893, 1643], [2108, 1316]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2593, 213], [2741, 249], [2591, 268]], np.int32),
+            "STANDING_ZONE": np.array([[2437, 1370], [2924, 1560], [2817, 1833], [2252, 1550]], np.int32),
+            "DOOR_ROI": np.array([[2326, 62], [3261, 332], [3022, 1689], [2286, 1396]], np.int32),
+            "INTERACTION_ZONE": np.array([[45, 39], [3791, 44], [3786, 2126], [45, 2111]], np.int32)
+        }
+    },
+    # Stream 12 - Rajahmundry
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.101:8001/Streaming/Channels/1501",
+        "camera_id": "GF-14-CAM-15",
+        "site_id": "14",
+        "site_name": "rajahmundry-store",
+        "closed_door_reference": "close_doors/closed_GF-14-CAM-15.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([[1427, 4], [1542, 3], [1426, 46]], np.int32),
+            "INTERACTION_ZONE": np.array([[32, 34], [2656, 31], [2653, 1489], [38, 1496]], np.int32),
+            "STANDING_ZONE": np.array([[1980, 968], [1568, 992], [1462, 669], [1888, 676]], np.int32),
+            "LOCKS_ROI": np.array([[1441, 124], [1901, 124], [1869, 555], [1438, 551]], np.int32),
+            "DOOR_ROI": np.array([[1390, 13], [1904, 5], [1895, 789], [1423, 795]], np.int32)
+        }
+    },
+    # Stream 13 - Kurnool
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@103.206.112.148:8001/Streaming/Channels/1801",
+        "camera_id": "GF-16-CAM-18",
+        "site_id": "16",
+        "site_name": "kurnool-store",
+        "closed_door_reference": "close_doors/closed_GF-16-CAM-18.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "INTERACTION_ZONE": np.array([[30, 34], [2651, 31], [2658, 1482], [40, 1482]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[1187, 7], [1204, 62], [1334, 4]], np.int32),
+            "STANDING_ZONE": np.array([[1279, 642], [1066, 1077], [1787, 1318], [1968, 824]], np.int32),
+            "LOCKS_ROI": np.array([[1003, 35], [998, 887], [1882, 981], [1898, 76]], np.int32),
+            "DOOR_ROI": np.array([[920, 24], [972, 997], [1981, 1137], [2007, 13]], np.int32)
+        }
+    },
+    # Stream 14 - Ongole
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.81.163:8001/Streaming/Channels/501",
+        "camera_id": "GF-27-CAM-05",
+        "site_id": "27",
+        "site_name": "ongole-store",
+        "closed_door_reference": "close_doors/closed_GF-27-CAM-05.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([[1955, 957], [2341, 1200], [2221, 1438], [1811, 1156]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2217, 277], [2330, 324], [2207, 326]], np.int32),
+            "INTERACTION_ZONE": np.array([[60, 48], [47, 1479], [2638, 1486], [2635, 41]], np.int32),
+            "LOCKS_ROI": np.array([[2123, 470], [2593, 676], [2421, 1143], [1975, 916]], np.int32),
+            "DOOR_ROI": np.array([[2157, 216], [2675, 446], [2294, 1438], [1828, 1153]], np.int32)
+        }
+    },
+    # Stream 15 - Srikakulam
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.130.104:8001/Streaming/Channels/2701",
+        "camera_id": "GF-20-CAM-27",
+        "site_id": "20",
+        "site_name": "srikakulam-store",
+        "closed_door_reference": "close_doors/closed_GF-20-CAM-27.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "INTERACTION_ZONE": np.array([[45, 64], [3790, 49], [3800, 2111], [40, 2106]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[506, 445], [785, 295], [532, 552]], np.int32),
+            "STANDING_ZONE": np.array([[942, 1775], [1142, 2082], [1786, 1638], [1562, 1399]], np.int32),
+            "LOCKS_ROI": np.array([[421, 911], [1288, 495], [1571, 1224], [793, 1706]], np.int32),
+            "DOOR_ROI": np.array([[301, 461], [1246, 30], [1648, 1474], [920, 1902]], np.int32)
+        }
+    },
+    # Stream 16 - Tirupathi
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@202.83.31.24:8001/Streaming/Channels/2101",
+        "camera_id": "GF-23-CAM-14",
+        "site_id": "23",
+        "site_name": "tirupathi-store",
+        "closed_door_reference": "close_doors/closed_GF-23-CAM-14.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([[1907, 6], [1907, 59], [2071, 5]], np.int32),
+            "INTERACTION_ZONE": np.array([[52, 68], [3766, 46], [3781, 2084], [59, 2114]], np.int32),
+            "LOCKS_ROI": np.array([[1732, 215], [2234, 225], [2230, 780], [1752, 746]], np.int32),
+            "STANDING_ZONE": np.array([[1996, 1375], [2144, 1056], [1778, 785], [1523, 953]], np.int32),
+            "DOOR_ROI": np.array([[1591, 24], [2390, 26], [2230, 1153], [1591, 874]], np.int32)
         }
     }
 ]
