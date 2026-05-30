@@ -131,54 +131,54 @@ STREAMS_CONFIG = [
         }
     },
     # Stream 1
-    {
-        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
-        "camera_id": "FF-1-CAM-42",
-        "site_id": "1",
-        "site_name": "somajiguda",
-        "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
-        "ssim_threshold": 0.80,
-        "debounce_threshold": 15,
-        "intensity_threshold": 6,
-        "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 2.5,
-        "max_unlock_seconds": 10.0,
+    # {
+    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
+    #     "camera_id": "FF-1-CAM-42",
+    #     "site_id": "1",
+    #     "site_name": "somajiguda",
+    #     "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
+    #     "ssim_threshold": 0.80,
+    #     "debounce_threshold": 15,
+    #     "intensity_threshold": 6,
+    #     "motion_threshold": 3.0,
+    #     "door_corner_min_visible_ratio": 0.5,
+    #     "min_unlock_seconds": 2.5,
+    #     "max_unlock_seconds": 10.0,
 
-        "evening_second_unlocker_timeout_seconds": 300.0,
-        "rois": {
-            "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
-            "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
-            "DOOR_CORNER_ROI": np.array([[423, 33], [420, 11], [442, 3], [620, 1]], np.int32),
-            "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
-            "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
-        }
-    },
-    # Stream 2 - additional Somajiguda stream
-    {
-        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8004/Streaming/Channels/301",
-        "camera_id": "TF-1-CAM-03",
-        "site_id": "1",
-        "site_name": "somajiguda",
-        "closed_door_reference": "close_doors/closed_TF-1-CAM-03.jpg",
-        "ssim_threshold": 0.80,
-        "debounce_threshold": 20,
-        "intensity_threshold": 6,
-        "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
-        "max_unlock_seconds": 10.0,
+    #     "evening_second_unlocker_timeout_seconds": 300.0,
+    #     "rois": {
+    #         "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
+    #         "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
+    #         "DOOR_CORNER_ROI": np.array([[423, 33], [420, 11], [442, 3], [620, 1]], np.int32),
+    #         "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
+    #         "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
+    #     }
+    # },
+    # # Stream 2 - additional Somajiguda stream
+    # {
+    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8004/Streaming/Channels/301",
+    #     "camera_id": "TF-1-CAM-03",
+    #     "site_id": "1",
+    #     "site_name": "somajiguda",
+    #     "closed_door_reference": "close_doors/closed_TF-1-CAM-03.jpg",
+    #     "ssim_threshold": 0.80,
+    #     "debounce_threshold": 20,
+    #     "intensity_threshold": 6,
+    #     "motion_threshold": 3.0,
+    #     "door_corner_min_visible_ratio": 0.5,
+    #     "min_unlock_seconds": 5.0,
+    #     "max_unlock_seconds": 10.0,
 
-        "evening_second_unlocker_timeout_seconds": 300.0,
-        "rois": {
-            "STANDING_ZONE": np.array([(2695.7683372532724, 449.2897989300864), (2689.3931009038906, 550.1125226621584), (2518.2069728832303, 509.9723271262794), (2530.012912746724, 404.89946234118446)], np.int32),
-            "LOCKS_ROI": np.array([(2427.301235934328, 51.42962553034492), (2744.961941161355, 90.19527235354568), (2712.0739658273365, 384.8715313463512), (2395.425198302895, 326.50802434975077)], np.int32),
-            "DOOR_ROI": np.array([(2755.4860932682404, 6.002055498458372), (2693.6566996402858, 504.5837615621785), (2355.568313206576, 417.7595066803697), (2402.9269976875626, 4.6865364850976325)], np.int32),
-            "DOOR_CORNER_ROI": np.array([(2509.4705485611494, 3.0252720900202896), (2576.7644057830644, 4.205866076369671), (2507.1093605884507, 34.901309721453586)], np.int32),
-            "INTERACTION_ZONE": np.array([(15.347721822541956, 11.289429994465959), (3830.520491694877, 11.595429538721955), (3804.3462345508183, 2130.4556354916053), (41.43884892086331, 2129.7841726618703)], np.int32)
-        }
-    },
-    # Stream 3
+    #     "evening_second_unlocker_timeout_seconds": 300.0,
+    #     "rois": {
+    #         "STANDING_ZONE": np.array([(2695.7683372532724, 449.2897989300864), (2689.3931009038906, 550.1125226621584), (2518.2069728832303, 509.9723271262794), (2530.012912746724, 404.89946234118446)], np.int32),
+    #         "LOCKS_ROI": np.array([(2427.301235934328, 51.42962553034492), (2744.961941161355, 90.19527235354568), (2712.0739658273365, 384.8715313463512), (2395.425198302895, 326.50802434975077)], np.int32),
+    #         "DOOR_ROI": np.array([(2755.4860932682404, 6.002055498458372), (2693.6566996402858, 504.5837615621785), (2355.568313206576, 417.7595066803697), (2402.9269976875626, 4.6865364850976325)], np.int32),
+    #         "DOOR_CORNER_ROI": np.array([(2509.4705485611494, 3.0252720900202896), (2576.7644057830644, 4.205866076369671), (2507.1093605884507, 34.901309721453586)], np.int32),
+    #         "INTERACTION_ZONE": np.array([(15.347721822541956, 11.289429994465959), (3830.520491694877, 11.595429538721955), (3804.3462345508183, 2130.4556354916053), (41.43884892086331, 2129.7841726618703)], np.int32)
+    #     }
+    # },
+    # # Stream 3
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
         "camera_id": "GF-2-CAM-21",
@@ -331,52 +331,52 @@ STREAMS_CONFIG = [
     }
     ,
     # Stream 9 - additional Jubilee Hills stream
-    {
-        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8002/Streaming/Channels/1101",
-        "camera_id": "FF-2-CAM-11",
-        "site_id": "2",
-        "site_name": "jubilee_hills",
-        "closed_door_reference": "close_doors/closed_FF-2-CAM-11.jpg",
-        "ssim_threshold": 0.80,
-        "debounce_threshold": 20,
-        "intensity_threshold": 6,
-        "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
-        "max_unlock_seconds": 10.0,
+    # {
+    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8002/Streaming/Channels/1101",
+    #     "camera_id": "FF-2-CAM-11",
+    #     "site_id": "2",
+    #     "site_name": "jubilee_hills",
+    #     "closed_door_reference": "close_doors/closed_FF-2-CAM-11.jpg",
+    #     "ssim_threshold": 0.80,
+    #     "debounce_threshold": 20,
+    #     "intensity_threshold": 6,
+    #     "motion_threshold": 3.0,
+    #     "door_corner_min_visible_ratio": 0.5,
+    #     "min_unlock_seconds": 5.0,
+    #     "max_unlock_seconds": 10.0,
 
-        "evening_second_unlocker_timeout_seconds": 50.0,
-        "rois": {
-            "STANDING_ZONE": np.array(
-                [(545.8414513929836, 740.9811320754717), (1106.8980551665684, 572.9811320754717),
-                 (1279.5395683453237, 821.2374100719425), (667.1654676258993, 1040.4028776978419)],
-                np.int32
-            ),
-            "DOOR_ROI": np.array(
-                [(513.2535807291663, 6.609686609686621), (1219.7150997150989, 5.014245014245027),
-                 (1402.3931623931621, 139.4871794871795), (1373.6752136752134, 917.2649572649572),
-                 (516.4444444444445, 1108.4444444444446)],
-                np.int32
-            ),
-            "LOCKS_ROI": np.array(
-                [(512.278068529673, 16.720451293957353), (1292.6394786215064, 11.411870272924473),
-                 (1199.739310753431, 799.7361518963072), (531.9259259259259, 852.8888888888889)],
-                np.int32
-            ),
-            "DOOR_CORNER_ROI": np.array(
-                [(562.8413531510314, 57.5085195001893), (667.1654728026784, 54.964028776978395),
-                 (560.2968624278205, 89.73873532752741)],
-                np.int32
-            ),
-            "INTERACTION_ZONE": np.array(
-                [(45.388367729831145, 48.91557223264539), (2634.5925925925926, 30.962962962962962),
-                 (2637.5684803001877, 1481.1707317073171), (40.34521575984991, 1460.9981238273922)],
-                np.int32
-            )
-        }
-    }
-    ,
-    # Stream 10 - Kokapet
+    #     "evening_second_unlocker_timeout_seconds": 50.0,
+    #     "rois": {
+    #         "STANDING_ZONE": np.array(
+    #             [(545.8414513929836, 740.9811320754717), (1106.8980551665684, 572.9811320754717),
+    #              (1279.5395683453237, 821.2374100719425), (667.1654676258993, 1040.4028776978419)],
+    #             np.int32
+    #         ),
+    #         "DOOR_ROI": np.array(
+    #             [(513.2535807291663, 6.609686609686621), (1219.7150997150989, 5.014245014245027),
+    #              (1402.3931623931621, 139.4871794871795), (1373.6752136752134, 917.2649572649572),
+    #              (516.4444444444445, 1108.4444444444446)],
+    #             np.int32
+    #         ),
+    #         "LOCKS_ROI": np.array(
+    #             [(512.278068529673, 16.720451293957353), (1292.6394786215064, 11.411870272924473),
+    #              (1199.739310753431, 799.7361518963072), (531.9259259259259, 852.8888888888889)],
+    #             np.int32
+    #         ),
+    #         "DOOR_CORNER_ROI": np.array(
+    #             [(562.8413531510314, 57.5085195001893), (667.1654728026784, 54.964028776978395),
+    #              (560.2968624278205, 89.73873532752741)],
+    #             np.int32
+    #         ),
+    #         "INTERACTION_ZONE": np.array(
+    #             [(45.388367729831145, 48.91557223264539), (2634.5925925925926, 30.962962962962962),
+    #              (2637.5684803001877, 1481.1707317073171), (40.34521575984991, 1460.9981238273922)],
+    #             np.int32
+    #         )
+    #     }
+    # }
+    # ,
+    # # Stream 10 - Kokapet
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.112.217:8001/Streaming/Channels/1501",
         "camera_id": "GF-12-CAM-15",
