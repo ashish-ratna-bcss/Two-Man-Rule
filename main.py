@@ -822,37 +822,14 @@ def main(
 
             auth_tracking_allowed = (
                 current_auth_window == "morning"
-                or (current_auth_window == "evening" and evening_auth_started)
+                or current_auth_window == "evening"
             )
 
-            # ---- Presence-triggered / door-triggered inference ----
-            # Morning: cheap MOG2 background subtraction on INTERACTION_ZONE detects
-            #          the first person entering the scene; only then start YOLO.
-            # Evening: YOLO activates only after the door starts closing (OPEN→CLOSED),
-            #          detected by door_verifier which runs independent of tracking_active.
+            # Active Monitoring: Run AI continuously during active windows.
             if current_auth_window == "morning" and not morning_check_done:
-                if not presence_triggered:
-                    _bx1, _bx2 = presence_roi_bbox[0], presence_roi_bbox[2]
-                    _by1, _by2 = presence_roi_bbox[1], presence_roi_bbox[3]
-                    _scan_gray = cv2.cvtColor(
-                        clean_frame[_by1:_by2, _bx1:_bx2], cv2.COLOR_BGR2GRAY
-                    )
-                    _lr = 0.1 if _presence_scan_count <= PRESENCE_WARMUP_FRAMES else 0.005
-                    _fg = presence_bg.apply(_scan_gray, learningRate=_lr)
-                    _presence_scan_count += 1
-                    if (
-                        _presence_scan_count > PRESENCE_WARMUP_FRAMES
-                        and cv2.countNonZero(_fg) > PRESENCE_PIXEL_THRESHOLD
-                    ):
-                        presence_triggered = True
-                        print(
-                            f"[{cam_id}] Person presence detected (scan {_presence_scan_count}). "
-                            f"Starting morning inference."
-                        )
-                scanner_inference_active = presence_triggered or debug or show_all_detections
+                scanner_inference_active = True
             elif current_auth_window == "evening" and not evening_check_done:
-                # YOLO only needed after door starts closing; door_verifier runs regardless
-                scanner_inference_active = evening_auth_started or debug or show_all_detections
+                scanner_inference_active = True
             else:
                 scanner_inference_active = debug or show_all_detections
 
@@ -1025,7 +1002,7 @@ def main(
 
                         auth_active = (
                             current_auth_window == "morning"
-                            or (current_auth_window == "evening" and evening_auth_started)
+                            or current_auth_window == "evening"
                             or (current_auth_window is None and (debug or show_all_detections))
                         )
 
@@ -1254,13 +1231,14 @@ def main(
                     (10, 80), color=(0, 0, 255), bg_color=(0, 0, 100),
                 )
                 if "SAME_ID" not in state_machine.session["captured_violations"]:
-                    persons_auth_status = False
-                    _capture(
-                        "DOOR_OPEN_UNAUTHORIZED_PRESENCE",
-                        {"reason": "same_person_tried_both_slots"},
-                        current_auth_window or "Security",
-                    )
                     state_machine.session["captured_violations"].append("SAME_ID")
+                    if current_auth_window != "morning":
+                        persons_auth_status = False
+                        _capture(
+                            "DOOR_OPEN_UNAUTHORIZED_PRESENCE",
+                            {"reason": "same_person_tried_both_slots"},
+                            current_auth_window or "Security",
+                        )
 
                 if current_auth_window == "evening":
                     evening_check_done   = True
@@ -1272,6 +1250,12 @@ def main(
                     break
                 elif current_auth_window == "morning":
                     if is_door_open:
+                        persons_auth_status = False
+                        _capture(
+                            "DOOR_OPEN_UNAUTHORIZED_PRESENCE",
+                            {"reason": "same_person_tried_both_slots"},
+                            "Morning",
+                        )
                         morning_check_done = True
                         stream_priority_active = False
                         print("[MORNING] Dual Auth FAILED: Same person attempted both unlocks (Door open). Exiting.")
@@ -1302,7 +1286,18 @@ def main(
                     is_auth = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
 
-                    if is_auth and both_in_interaction:
+                    if "SAME_ID" in state_machine.session.get("captured_violations", []):
+                        persons_auth_status = False
+                        _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
+                            "authorized": False,
+                            "p1_id": state_machine.session.get("id_a"),
+                            "p2_id": state_machine.session.get("id_b"),
+                            "transition": "CLOSED_TO_OPEN",
+                            "both_in_interaction_zone": both_in_interaction,
+                            "reason": "same_person_tried_both_slots",
+                        }, "Morning")
+                        print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST (SAME_ID).")
+                    elif is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
                             "authorized": True,
@@ -1356,7 +1351,7 @@ def main(
             # ===== EVENING CHECK =====
             elif is_evening_window and not evening_check_done:
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:
-                    state_machine.reset_session()
+                    # Do not reset the session here; allow authentications that happened just prior to the door closing to persist.
                     evening_auth_started = True
                     state_machine.session["door_closing_start_frame"] = frame_idx
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
