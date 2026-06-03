@@ -1,0 +1,212 @@
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Dict, Optional
+
+import cv2
+import numpy as np
+
+import config
+
+
+class FrameQualityStatus(str, Enum):
+    GOOD = "GOOD"
+    SUSPECT = "SUSPECT"
+    CORRUPT = "CORRUPT"
+    STALE = "STALE"
+
+
+@dataclass
+class FrameQualityResult:
+    status: FrameQualityStatus
+    reason: str = "ok"
+    usable: bool = True
+    degraded: bool = False
+    consecutive_bad: int = 0
+    consecutive_good: int = 0
+    metrics: Dict[str, float] = field(default_factory=dict)
+
+
+class FrameQualityGate:
+    """
+    Screens decoded frames before they can update AI, door, or auth state.
+
+    The gate intentionally prefers freezing a few frames over allowing obvious
+    decode artifacts to become security events.
+    """
+
+    def __init__(
+        self,
+        door_corner_roi: Optional[np.ndarray] = None,
+        *,
+        enabled: Optional[bool] = None,
+        degraded_after_frames: Optional[int] = None,
+        recovery_good_frames: Optional[int] = None,
+        stale_after_frames: Optional[int] = None,
+    ):
+        self.enabled = bool(config.FRAME_QUALITY_ENABLED if enabled is None else enabled)
+        self.degraded_after_frames = int(
+            degraded_after_frames
+            if degraded_after_frames is not None
+            else config.FRAME_QUALITY_DEGRADED_AFTER_FRAMES
+        )
+        self.recovery_good_frames = int(
+            recovery_good_frames
+            if recovery_good_frames is not None
+            else config.FRAME_QUALITY_RECOVERY_GOOD_FRAMES
+        )
+        self.stale_after_frames = int(
+            stale_after_frames
+            if stale_after_frames is not None
+            else config.FRAME_QUALITY_STALE_AFTER_FRAMES
+        )
+        self.door_corner_roi = door_corner_roi.reshape(-1, 2).astype(np.int32) if door_corner_roi is not None else None
+
+        self._last_gray_small = None
+        self._last_good_gray_small = None
+        self._stale_frames = 0
+        self._consecutive_bad = 0
+        self._consecutive_good = 0
+        self._recovering = False
+
+    def evaluate(self, frame: np.ndarray) -> FrameQualityResult:
+        if not self.enabled:
+            return FrameQualityResult(status=FrameQualityStatus.GOOD, usable=True)
+
+        status, reason, metrics, gray_small = self._classify(frame)
+
+        if status == FrameQualityStatus.GOOD:
+            self._consecutive_good += 1
+            if self._recovering and self._consecutive_good < self.recovery_good_frames:
+                usable = False
+                reason = f"recovering_good_frames_{self._consecutive_good}_of_{self.recovery_good_frames}"
+            else:
+                usable = True
+                self._recovering = False
+                self._consecutive_bad = 0
+            if gray_small is not None:
+                self._last_good_gray_small = gray_small.copy()
+        else:
+            self._consecutive_bad += 1
+            self._consecutive_good = 0
+            self._recovering = True
+            usable = False
+
+        if gray_small is not None:
+            self._last_gray_small = gray_small.copy()
+
+        degraded = self._consecutive_bad >= self.degraded_after_frames
+        return FrameQualityResult(
+            status=status,
+            reason=reason,
+            usable=usable,
+            degraded=degraded,
+            consecutive_bad=self._consecutive_bad,
+            consecutive_good=self._consecutive_good,
+            metrics=metrics,
+        )
+
+    def _classify(self, frame: np.ndarray):
+        metrics: Dict[str, float] = {}
+        if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
+            return FrameQualityStatus.CORRUPT, "invalid_frame_shape", metrics, None
+
+        height, width = frame.shape[:2]
+        if height < 16 or width < 16:
+            return FrameQualityStatus.CORRUPT, "frame_too_small", metrics, None
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray_small = cv2.resize(gray, (64, 36), interpolation=cv2.INTER_AREA)
+        hsv_small = cv2.cvtColor(cv2.resize(frame, (64, 36), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2HSV)
+
+        metrics.update(self._patch_metrics(gray_small, hsv_small, prefix="frame"))
+
+        if self._last_gray_small is not None:
+            frame_delta = float(np.mean(cv2.absdiff(gray_small, self._last_gray_small)))
+            metrics["frame_delta"] = frame_delta
+            if frame_delta < 0.2:
+                self._stale_frames += 1
+            else:
+                self._stale_frames = 0
+            if self._stale_frames >= self.stale_after_frames:
+                return FrameQualityStatus.STALE, "repeated_identical_frames", metrics, gray_small
+        else:
+            self._stale_frames = 0
+
+        if self._last_good_gray_small is not None:
+            good_delta_img = cv2.absdiff(gray_small, self._last_good_gray_small)
+            good_delta = float(np.mean(good_delta_img))
+            good_delta_std = float(np.std(good_delta_img))
+            metrics["last_good_delta"] = good_delta
+            metrics["last_good_delta_std"] = good_delta_std
+            if good_delta > 95.0 and good_delta_std > 40.0:
+                return FrameQualityStatus.SUSPECT, "sudden_spatial_frame_change", metrics, gray_small
+
+        frame_reason = self._artifact_reason(metrics, "frame")
+        if frame_reason:
+            return FrameQualityStatus.CORRUPT, frame_reason, metrics, gray_small
+
+        if self.door_corner_roi is not None:
+            crop = self._crop_roi(frame, self.door_corner_roi)
+            if crop is not None:
+                crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                crop_gray_small = cv2.resize(crop_gray, (32, 24), interpolation=cv2.INTER_AREA)
+                crop_hsv_small = cv2.cvtColor(cv2.resize(crop, (32, 24), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2HSV)
+                metrics.update(self._patch_metrics(crop_gray_small, crop_hsv_small, prefix="door"))
+                door_reason = self._artifact_reason(metrics, "door")
+                if door_reason:
+                    return FrameQualityStatus.CORRUPT, door_reason, metrics, gray_small
+
+        return FrameQualityStatus.GOOD, "ok", metrics, gray_small
+
+    def _patch_metrics(self, gray_patch: np.ndarray, hsv_patch: np.ndarray, *, prefix: str) -> Dict[str, float]:
+        h, w = gray_patch.shape[:2]
+        left = gray_patch[:, : max(1, w // 2)]
+        right = gray_patch[:, max(1, w // 2):]
+        white_ratio = float(np.mean(gray_patch >= 245))
+        black_ratio = float(np.mean(gray_patch <= 8))
+        sat = hsv_patch[:, :, 1]
+        sat_ratio = float(np.mean(sat >= 120))
+        sat_std = float(np.std(sat))
+        left_mean = float(np.mean(left))
+        right_mean = float(np.mean(right))
+
+        return {
+            f"{prefix}_white_ratio": white_ratio,
+            f"{prefix}_black_ratio": black_ratio,
+            f"{prefix}_sat_ratio": sat_ratio,
+            f"{prefix}_sat_std": sat_std,
+            f"{prefix}_half_mean_delta": abs(left_mean - right_mean),
+            f"{prefix}_max_half_mean": max(left_mean, right_mean),
+            f"{prefix}_min_half_mean": min(left_mean, right_mean),
+        }
+
+    def _artifact_reason(self, metrics: Dict[str, float], prefix: str) -> Optional[str]:
+        half_delta = metrics.get(f"{prefix}_half_mean_delta", 0.0)
+        max_half = metrics.get(f"{prefix}_max_half_mean", 0.0)
+        min_half = metrics.get(f"{prefix}_min_half_mean", 0.0)
+        white_ratio = metrics.get(f"{prefix}_white_ratio", 0.0)
+        black_ratio = metrics.get(f"{prefix}_black_ratio", 0.0)
+        sat_ratio = metrics.get(f"{prefix}_sat_ratio", 0.0)
+        sat_std = metrics.get(f"{prefix}_sat_std", 0.0)
+
+        if half_delta >= 85.0 and (max_half >= 220.0 or min_half <= 20.0):
+            return f"{prefix}_half_frame_brightness_split"
+        if white_ratio >= 0.65:
+            return f"{prefix}_large_white_block"
+        if black_ratio >= 0.85:
+            return f"{prefix}_large_black_block"
+        if sat_ratio >= 0.45 and sat_std >= 45.0:
+            return f"{prefix}_abnormal_chroma_artifacts"
+        if prefix == "frame" and sat_ratio >= 0.75 and metrics.get("last_good_delta", 0.0) >= 50.0:
+            return f"{prefix}_abnormal_chroma_artifacts"
+        return None
+
+    def _crop_roi(self, frame: np.ndarray, roi: np.ndarray) -> Optional[np.ndarray]:
+        height, width = frame.shape[:2]
+        x1 = max(0, int(np.min(roi[:, 0])))
+        y1 = max(0, int(np.min(roi[:, 1])))
+        x2 = min(width, int(np.max(roi[:, 0])) + 1)
+        y2 = min(height, int(np.max(roi[:, 1])) + 1)
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return frame[y1:y2, x1:x2]

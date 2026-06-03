@@ -24,6 +24,7 @@ from logic.roi_manager import ROIManager
 from logic.state_machine import DualAuthStateMachine
 
 from io_.video_handler import VideoHandler
+from io_.frame_quality import FrameQualityGate
 from io_.visualizer import Visualizer
 from io_.alert_system import AlertSystem
 from io_.runtime_logger import RuntimeEventLogger
@@ -405,22 +406,45 @@ def can_show_live_window(show_live: bool) -> bool:
     return True
 
 
+def should_freeze_for_frame_quality(frame_quality_result, frame_quality_active: bool) -> bool:
+    return bool(
+        frame_quality_active
+        and frame_quality_result is not None
+        and not frame_quality_result.usable
+    )
+
+
 def _seconds_until_next_window() -> float:
-    """Return seconds until the next morning (07:00) or evening (19:00) window begins."""
+    """Return seconds until the next morning (07:00) or evening (19:00) window begins.
+    Returns 0.0 immediately if we are already inside an active window.
+    """
     now = datetime.now(IST)
     curr_min = now.hour * 60 + now.minute
-    morning_start_min = 7 * 60   # 07:00
-    evening_start_min = 19 * 60  # 19:00
 
+    morning_start_min = 7 * 60    # 07:00
+    morning_end_min   = 11 * 60   # 11:00
+    evening_start_min = 19 * 60   # 19:00
+    evening_end_min   = 23 * 60   # 23:00
+
+    # Already inside an active window → no sleep needed
+    if morning_start_min <= curr_min <= morning_end_min:
+        return 0.0
+    if evening_start_min <= curr_min <= evening_end_min:
+        return 0.0
+
+    # Before morning window → sleep until 07:00 today
     if curr_min < morning_start_min:
         target = now.replace(hour=7, minute=0, second=0, microsecond=0)
+    # Between windows (11:01 – 18:59) → sleep until 19:00 today
     elif curr_min < evening_start_min:
         target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+    # After evening window (23:01+) → sleep until 07:00 tomorrow
     else:
         tomorrow = now + timedelta(days=1)
         target = tomorrow.replace(hour=7, minute=0, second=0, microsecond=0)
 
     return max(0.0, (target - now).total_seconds())
+
 
 
 def capture(
@@ -682,6 +706,12 @@ def main(
         )
         visualizer   = Visualizer()
         alert_system = AlertSystem(evidence_dir=evidence_dir, runtime_logger=runtime_logger)
+        frame_quality_gate = FrameQualityGate(
+            door_corner_roi=active_rois.get("DOOR_CORNER_ROI"),
+            degraded_after_frames=int(getattr(config, "FRAME_QUALITY_DEGRADED_AFTER_FRAMES", 15)),
+            recovery_good_frames=int(getattr(config, "FRAME_QUALITY_RECOVERY_GOOD_FRAMES", 5)),
+            stale_after_frames=int(getattr(config, "FRAME_QUALITY_STALE_AFTER_FRAMES", 90)),
+        )
 
         startup_ist    = datetime.now(IST)
         last_reset_date = startup_ist.strftime("%Y-%m-%d")
@@ -718,6 +748,9 @@ def main(
         intensity_val                = None
         intensity_diff               = None
         door_transition_pending      = False
+        frame_quality_result         = None
+        frame_quality_was_frozen     = False
+        video_quality_degraded_logged = False
         tracking_active              = False
         presence_triggered           = False
         _presence_scan_count         = 0
@@ -738,9 +771,14 @@ def main(
         print("[SYSTEM] Starting frame processing loop...")
         t_loop_start          = time.perf_counter()
         processed_frames_count = 0
+        video_read_timeout = (
+            float(getattr(config, "RTSP_READ_TIMEOUT_SECONDS", 1.5))
+            if total_frames <= 0
+            else 0.1
+        )
 
         while True:
-            ret, frame, frame_ist = video.read_frame(block=True, timeout=0.1)
+            ret, frame, frame_ist = video.read_frame(block=True, timeout=video_read_timeout)
             if not ret:
                 if stream_config.get("camera_id"):
                     print(f"[SYSTEM] Stream {stream_config['camera_id']} died. Exiting for restart.")
@@ -755,6 +793,7 @@ def main(
             # now_ist is pinned at cap.read() grab time inside VideoHandler.
             # Falls back to wall-clock only if grab timestamp missing.
             now_ist    = frame_ist if frame_ist is not None else datetime.now(IST)
+            frame_quality_result = frame_quality_gate.evaluate(frame)
             today_str  = now_ist.strftime("%Y-%m-%d")
             if last_reset_date != today_str:
                 print(f"[SYSTEM] Midnight reset for {today_str} IST.")
@@ -834,6 +873,97 @@ def main(
                 scanner_inference_active = debug or show_all_detections
 
             tracking_active = scanner_inference_active
+            frame_quality_active = auth_window_open or debug or show_all_detections
+
+            if frame_quality_active and frame_quality_result.usable and frame_quality_was_frozen:
+                runtime_logger.write_event(
+                    event_type="VIDEO_RECOVERED",
+                    message="Frame quality recovered; resuming AI/door/auth processing",
+                    level="INFO",
+                    details={
+                        "status": frame_quality_result.status.value,
+                        "reason": frame_quality_result.reason,
+                        "consecutive_good": frame_quality_result.consecutive_good,
+                    },
+                    frame_idx=frame_idx,
+                    ts_ist=now_ist,
+                )
+                print(
+                    f"[{cam_id}] VIDEO_RECOVERED after "
+                    f"{frame_quality_result.consecutive_good} good frame(s)."
+                )
+                frame_quality_was_frozen = False
+                video_quality_degraded_logged = False
+
+            if should_freeze_for_frame_quality(frame_quality_result, frame_quality_active):
+                last_processed_frame_idx = frame_idx
+                frame_quality_was_frozen = True
+                quality_metrics = {
+                    k: round(float(v), 3)
+                    for k, v in frame_quality_result.metrics.items()
+                    if isinstance(v, (int, float, np.integer, np.floating))
+                }
+
+                should_log_quality = (
+                    frame_quality_result.consecutive_bad == 1
+                    or frame_quality_result.consecutive_bad % 30 == 0
+                )
+                if frame_quality_result.degraded and not video_quality_degraded_logged:
+                    should_log_quality = True
+                    video_quality_degraded_logged = True
+                    quality_event_type = "VIDEO_DEGRADED"
+                    quality_level = "WARNING"
+                else:
+                    quality_event_type = "VIDEO_QUALITY_FREEZE"
+                    quality_level = "WARNING"
+
+                if should_log_quality:
+                    runtime_logger.write_event(
+                        event_type=quality_event_type,
+                        message="Frame quality gate froze AI/door/auth processing",
+                        level=quality_level,
+                        details={
+                            "status": frame_quality_result.status.value,
+                            "reason": frame_quality_result.reason,
+                            "usable": frame_quality_result.usable,
+                            "degraded": frame_quality_result.degraded,
+                            "consecutive_bad": frame_quality_result.consecutive_bad,
+                            "consecutive_good": frame_quality_result.consecutive_good,
+                            "metrics": quality_metrics,
+                        },
+                        frame_idx=frame_idx,
+                        ts_ist=now_ist,
+                    )
+                    print(
+                        f"[{cam_id}] {quality_event_type}: "
+                        f"{frame_quality_result.status.value} "
+                        f"reason={frame_quality_result.reason} "
+                        f"bad={frame_quality_result.consecutive_bad} "
+                        f"good={frame_quality_result.consecutive_good}"
+                    )
+
+                if live_window_available:
+                    try:
+                        status_text = (
+                            f"VIDEO QUALITY: {frame_quality_result.status.value} "
+                            f"| {frame_quality_result.reason}"
+                        )
+                        visualizer.draw_status_text(
+                            frame,
+                            status_text,
+                            (10, 105),
+                            color=(0, 165, 255),
+                            bg_color=(0, 50, 100),
+                        )
+                        cv2.imshow(f"Two-Man Rule Live ROI Debug - {cam_id}", frame)
+                        wait_ms = max(1, int(1000 / max(fps, 1)))
+                        if cv2.waitKey(wait_ms) & 0xFF == ord("q"):
+                            print("[SYSTEM] Live preview stopped by user.")
+                            break
+                    except cv2.error as e:
+                        print(f"[WARNING] Live preview unavailable: {e}")
+                        live_window_available = False
+                continue
 
             # ===== PIPELINE =====
             # Auth windows enable scanner inference. Scanner detections promote only

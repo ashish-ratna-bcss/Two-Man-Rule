@@ -6,3 +6,4 @@ scikit-image>=0.21.0
 torch>=2.0.0
 torchvision>=0.15.0
 pytest>=7.4.0
+PyGObject>=3.42.0

@@ -75,7 +75,13 @@ YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 
 # ============ STREAMS & ORCHESTRATION CONFIG ============
 # Optimization & Production Flags
-RTSP_LOW_LATENCY = True
+RTSP_INGEST_BACKEND = "gstreamer"  # RTSP uses GStreamer only; local files still use OpenCV.
+RTSP_TRANSPORT = "tcp"
+RTSP_JITTER_LATENCY_MS = 1000
+RTSP_DROP_ON_LATENCY = False
+RTSP_READ_TIMEOUT_SECONDS = 1.5
+RTSP_STARTUP_TIMEOUT_SECONDS = 10.0
+RTSP_LOW_LATENCY = False
 PRESERVE_FILE_FRAMES = True       # Offline videos are read sequentially with no frame overwrite/drop.
 RTSP_PREFER_REALTIME = True       # Live RTSP keeps latest frame to avoid latency buildup.
 STAGGER_START_DELAY = 2.0  # Seconds between stream launches
@@ -102,6 +108,13 @@ INFERENCE_TIMEOUT_SECONDS: float = 8.0
 # Formula: LKG_MAX_CONSECUTIVE_TIMEOUTS × process_every / fps = coast duration seconds
 # Default: 15 × 3 / 15 = 3.0s of coast time before graceful track ageing begins.
 LKG_MAX_CONSECUTIVE_TIMEOUTS: int = 15
+
+
+# ============ FRAME QUALITY / VIDEO DEGRADATION ============
+FRAME_QUALITY_ENABLED = True
+FRAME_QUALITY_DEGRADED_AFTER_FRAMES = 15
+FRAME_QUALITY_RECOVERY_GOOD_FRAMES = 5
+FRAME_QUALITY_STALE_AFTER_FRAMES = 90
 
 
 STREAMS_CONFIG = [
