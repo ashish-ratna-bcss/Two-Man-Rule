@@ -75,7 +75,7 @@ YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 
 # ============ STREAMS & ORCHESTRATION CONFIG ============
 # Optimization & Production Flags
-RTSP_INGEST_BACKEND = "gstreamer"  # RTSP uses GStreamer only; local files still use OpenCV.
+RTSP_INGEST_BACKEND = "pyav"
 RTSP_TRANSPORT = "tcp"
 RTSP_JITTER_LATENCY_MS = 1000
 RTSP_DROP_ON_LATENCY = False

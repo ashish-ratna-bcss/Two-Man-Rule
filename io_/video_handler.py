@@ -1,4 +1,5 @@
 import cv2
+import queue
 import time
 import numpy as np
 import threading
@@ -8,37 +9,13 @@ import config
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-
-def _quote_gst_value(value: str) -> str:
-    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def build_gstreamer_rtsp_pipeline(
-    rtsp_url: str,
-    *,
-    transport: str = "tcp",
-    latency_ms: int = 1000,
-    drop_on_latency: bool = False,
-) -> str:
-    """Build the audit-mode RTSP pipeline used by the GStreamer backend."""
-    transport = str(transport or "tcp").lower()
-    if transport not in {"tcp", "udp", "udp-mcast", "http", "tls"}:
-        raise ValueError(f"Unsupported RTSP transport: {transport}")
-
-    drop = "true" if drop_on_latency else "false"
-    latency_ms = max(0, int(latency_ms))
-    return (
-        "rtspsrc "
-        f"location={_quote_gst_value(rtsp_url)} "
-        f"protocols={transport} "
-        f"latency={latency_ms} "
-        f"drop-on-latency={drop} "
-        "! application/x-rtp,media=video "
-        "! decodebin "
-        "! videoconvert "
-        "! video/x-raw,format=BGR "
-        "! appsink name=appsink emit-signals=false sync=false max-buffers=1 drop=true"
-    )
+_RTSP_TRANSPORT_MAP = {
+    "tcp": "tcp",
+    "udp": "udp",
+    "udp-mcast": "udp_multicast",
+    "http": "http",
+    "tls": "tls",
+}
 
 
 class _OpenCVCapture:
@@ -59,7 +36,15 @@ class _OpenCVCapture:
         self.cap.release()
 
 
-class _GStreamerRTSPCapture:
+class _PyAVRTSPCapture:
+    """
+    RTSP capture via PyAV (FFmpeg bindings). Server-safe: pure Python wheel,
+    no system GStreamer or gobject-introspection required.
+
+    Background thread decodes into a queue(maxsize=1), dropping stale frames
+    so the caller always gets the newest available frame.
+    """
+
     def __init__(
         self,
         rtsp_url: str,
@@ -70,76 +55,83 @@ class _GStreamerRTSPCapture:
         read_timeout_seconds: float,
         startup_timeout_seconds: float,
     ):
+        try:
+            import av as _av
+            self._av = _av
+        except ImportError as e:
+            raise RuntimeError(
+                "RTSP ingest requires PyAV. Install with: pip install av>=12.0.0"
+            ) from e
+
         self.rtsp_url = rtsp_url
         self.read_timeout_seconds = max(0.1, float(read_timeout_seconds))
-        self.pipeline_description = build_gstreamer_rtsp_pipeline(
-            rtsp_url,
-            transport=transport,
-            latency_ms=latency_ms,
-            drop_on_latency=drop_on_latency,
-        )
-        self._pending_frame = None
         self._fps = 0.0
         self._width = 0
         self._height = 0
-        self._total_frames = 0
-        self._gst_error = None
+        self._error: Optional[str] = None
+        self._pending_frame: Optional[np.ndarray] = None
+        self._running = True
 
-        self.Gst = self._load_gstreamer()
-        self.pipeline = self.Gst.parse_launch(self.pipeline_description)
-        self.appsink = self.pipeline.get_by_name("appsink")
-        if self.appsink is None:
-            raise RuntimeError("GStreamer appsink not found in RTSP pipeline.")
+        av_transport = _RTSP_TRANSPORT_MAP.get(str(transport).lower(), "tcp")
+        options = {
+            "rtsp_transport": av_transport,
+            "buffer_size": "4096000",
+            "max_delay": str(max(0, int(latency_ms)) * 1000),  # microseconds
+            "stimeout": str(int(startup_timeout_seconds * 1_000_000)),
+        }
 
-        self.bus = self.pipeline.get_bus()
-        state_ret = self.pipeline.set_state(self.Gst.State.PLAYING)
-        if state_ret == self.Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError("Failed to set GStreamer RTSP pipeline to PLAYING.")
-
-        self._prime_first_frame(max(0.5, float(startup_timeout_seconds)))
-
-    def _load_gstreamer(self):
         try:
-            import gi
-            gi.require_version("Gst", "1.0")
-            from gi.repository import Gst
+            self._container = self._av.open(rtsp_url, options=options)
         except Exception as e:
-            raise RuntimeError(
-                "RTSP ingest is configured for GStreamer, but PyGObject/GStreamer "
-                "is unavailable. Install system GStreamer plugins plus PyGObject."
-            ) from e
+            raise RuntimeError(f"PyAV failed to open RTSP stream: {e}") from e
 
-        if not Gst.is_initialized():
-            Gst.init(None)
-        return Gst
+        video_streams = [s for s in self._container.streams if s.type == "video"]
+        if not video_streams:
+            raise RuntimeError("PyAV: no video stream found in RTSP source.")
+        self._video_stream = video_streams[0]
+        self._fps = float(self._video_stream.average_rate or config.DEFAULT_FPS)
+        self._width = self._video_stream.width or 0
+        self._height = self._video_stream.height or 0
+
+        self._queue: queue.Queue = queue.Queue(maxsize=1)
+        self._thread = threading.Thread(target=self._decode_loop, daemon=True)
+        self._thread.start()
+
+        self._prime_first_frame(startup_timeout_seconds)
+
+    def _decode_loop(self):
+        try:
+            for frame in self._container.decode(self._video_stream):
+                if not self._running:
+                    return
+                if self._width == 0:
+                    self._width = frame.width
+                    self._height = frame.height
+                bgr = frame.to_ndarray(format="bgr24")
+                if self._queue.full():
+                    try:
+                        self._queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                self._queue.put(bgr)
+        except Exception as e:
+            if self._running:
+                self._error = str(e)
+                self._queue.put(None)  # sentinel: error / EOS
 
     def _prime_first_frame(self, startup_timeout_seconds: float):
-        deadline = time.time() + startup_timeout_seconds
-        last_error = None
-        while time.time() < deadline:
-            ret, frame = self.read(timeout_seconds=min(self.read_timeout_seconds, max(0.1, deadline - time.time())))
-            if ret and frame is not None:
-                self._pending_frame = frame
-                return
-            if not ret:
-                last_error = self._gst_error
-                break
-        raise RuntimeError(
-            "GStreamer RTSP pipeline started but did not deliver a frame "
-            f"within {startup_timeout_seconds:.1f}s."
-            + (f" Last error: {last_error}" if last_error else "")
-        )
-
-    def _pop_error(self):
-        msg = self.bus.pop_filtered(self.Gst.MessageType.ERROR | self.Gst.MessageType.EOS)
-        if msg is None:
-            return None
-        if msg.type == self.Gst.MessageType.ERROR:
-            err, debug = msg.parse_error()
-            return f"{err}; debug={debug}"
-        if msg.type == self.Gst.MessageType.EOS:
-            return "end-of-stream"
-        return None
+        try:
+            frame = self._queue.get(timeout=startup_timeout_seconds)
+        except queue.Empty:
+            raise RuntimeError(
+                f"PyAV RTSP pipeline did not deliver a frame within {startup_timeout_seconds:.1f}s."
+            )
+        if frame is None:
+            raise RuntimeError(
+                "PyAV RTSP pipeline error during startup."
+                + (f" {self._error}" if self._error else "")
+            )
+        self._pending_frame = frame
 
     def read(self, timeout_seconds: Optional[float] = None):
         if self._pending_frame is not None:
@@ -147,43 +139,14 @@ class _GStreamerRTSPCapture:
             self._pending_frame = None
             return True, frame
 
-        error = self._pop_error()
-        if error is not None:
-            self._gst_error = error
-            return False, None
-
         timeout = self.read_timeout_seconds if timeout_seconds is None else max(0.1, float(timeout_seconds))
-        sample = self.appsink.emit("try-pull-sample", int(timeout * self.Gst.SECOND))
-        if sample is None:
-            error = self._pop_error()
-            if error is not None:
-                self._gst_error = error
-                return False, None
-            return True, None
-
-        frame = self._sample_to_bgr(sample)
-        return True, frame
-
-    def _sample_to_bgr(self, sample):
-        caps = sample.get_caps()
-        structure = caps.get_structure(0)
-        width = int(structure.get_value("width"))
-        height = int(structure.get_value("height"))
-        fps_value = structure.get_value("framerate")
-        if fps_value is not None and getattr(fps_value, "denom", 0):
-            self._fps = float(fps_value.num) / float(fps_value.denom)
-        self._width = width
-        self._height = height
-
-        buf = sample.get_buffer()
-        success, map_info = buf.map(self.Gst.MapFlags.READ)
-        if not success:
-            raise RuntimeError("Failed to map GStreamer sample buffer.")
         try:
-            frame = np.ndarray((height, width, 3), dtype=np.uint8, buffer=map_info.data)
-            return frame.copy()
-        finally:
-            buf.unmap(map_info)
+            frame = self._queue.get(timeout=timeout)
+            if frame is None:
+                return False, None  # error or EOS
+            return True, frame
+        except queue.Empty:
+            return True, None  # no sample yet — caller handles as transient timeout
 
     def get(self, prop_id):
         if prop_id == cv2.CAP_PROP_FPS:
@@ -193,22 +156,21 @@ class _GStreamerRTSPCapture:
         if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
             return self._height
         if prop_id == cv2.CAP_PROP_FRAME_COUNT:
-            return self._total_frames
+            return 0
         return 0
 
     def release(self):
+        self._running = False
         try:
-            self.pipeline.set_state(self.Gst.State.NULL)
+            self._container.close()
         except Exception:
             pass
 
 
 class VideoHandler:
     """
-    Asynchronous video input with audit-grade RTSP ingest.
-
-    RTSP sources are decoded through GStreamer with a TCP jitter buffer. Local
-    video files remain on OpenCV so offline replay behavior is unchanged.
+    Asynchronous video input. RTSP sources decoded via PyAV (FFmpeg);
+    local files via OpenCV.
     """
 
     def __init__(
@@ -252,13 +214,12 @@ class VideoHandler:
 
     def _open(self):
         if self._is_rtsp:
-            backend = str(getattr(config, "RTSP_INGEST_BACKEND", "gstreamer")).lower()
-            if backend != "gstreamer":
+            backend = str(getattr(config, "RTSP_INGEST_BACKEND", "pyav")).lower()
+            if backend != "pyav":
                 raise RuntimeError(
-                    "RTSP ingest is audit-mode GStreamer only. "
-                    f"Unsupported RTSP_INGEST_BACKEND={backend!r}."
+                    f"Unsupported RTSP_INGEST_BACKEND={backend!r}. Only 'pyav' is supported."
                 )
-            return _GStreamerRTSPCapture(
+            return _PyAVRTSPCapture(
                 self.video_source,
                 transport=getattr(config, "RTSP_TRANSPORT", "tcp"),
                 latency_ms=int(getattr(config, "RTSP_JITTER_LATENCY_MS", 1000)),
@@ -383,7 +344,7 @@ class VideoHandler:
 
     def get_telemetry(self) -> dict:
         return {
-            "backend": "gstreamer" if self._is_rtsp else "opencv",
+            "backend": "pyav" if self._is_rtsp else "opencv",
             "reconnect_count": self.reconnect_count,
             "read_timeouts": self.read_timeout_count,
             "frame_idx": self.current_frame_idx,

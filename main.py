@@ -547,7 +547,7 @@ def main(
     video_source: str = None,
     show_live: bool = True,
     scale_rois: bool = False,
-    process_every: int = 3,
+    process_every: int = 2,
     device: str = "auto",
     half: bool = True,
     show_all_detections: bool = False,
@@ -601,9 +601,32 @@ def main(
         },
     )
 
-    # Detector is lazy-loaded on first tracking activation (presence detected / door triggered).
-    # No YOLO model loaded at startup — zero GPU VRAM outside active windows.
-    detector = None
+    # Eager detector load — eliminates the ~5-6s dead zone at window start caused
+    # by lazy loading (torch import + YOLO load + 3x warmup) happening inside the
+    # frame loop on first inference activation.
+    _detector_load_start = time.perf_counter()
+    print(f"[{cam_id}] Pre-loading detector before window opens...")
+    detector = PoseDetector(device=device, half=half)
+    _detector_load_ms = (time.perf_counter() - _detector_load_start) * 1000.0
+    _window_ready_ist = datetime.now(IST).strftime("%H:%M:%S")
+    _secs_remaining = _seconds_until_next_window()
+    print(
+        f"[{cam_id}] Detector ready at {_window_ready_ist} IST "
+        f"(load: {_detector_load_ms:.0f}ms). "
+        f"Window opens in {_secs_remaining:.0f}s."
+    )
+    runtime_logger.write_event(
+        event_type="DETECTOR_READY",
+        message="Detector pre-loaded before window activation",
+        level="INFO",
+        details={
+            "load_ms":         round(_detector_load_ms),
+            "ready_at_ist":    _window_ready_ist,
+            "secs_to_window":  round(_secs_remaining),
+            "device":          device,
+            "half":            half,
+        },
+    )
 
     tracker      = PersonTracker()
     roi_manager  = ROIManager()
@@ -827,11 +850,28 @@ def main(
                 current_auth_window = "evening"
 
             if current_auth_window != active_auth_window:
+                _transition_ist = now_ist.strftime("%H:%M:%S")
                 if current_auth_window is None:
                     if active_auth_window is not None:
-                        print(f"[SYSTEM] Leaving {active_auth_window} auth window. Clearing auth session.")
+                        print(f"[SYSTEM] [{_transition_ist} IST] Leaving {active_auth_window} auth window. Clearing auth session.")
+                        runtime_logger.write_event(
+                            event_type="WINDOW_CLOSE",
+                            message=f"{active_auth_window} auth window closed",
+                            level="INFO",
+                            details={"window": active_auth_window, "frame_idx": frame_idx},
+                            frame_idx=frame_idx,
+                            ts_ist=now_ist,
+                        )
                 else:
-                    print(f"[SYSTEM] Starting {current_auth_window} auth window with a fresh auth session.")
+                    print(f"[SYSTEM] [{_transition_ist} IST] Starting {current_auth_window} auth window. Detector already hot. Fresh session.")
+                    runtime_logger.write_event(
+                        event_type="WINDOW_OPEN",
+                        message=f"{current_auth_window} auth window activated — detector hot, inference immediate",
+                        level="INFO",
+                        details={"window": current_auth_window, "frame_idx": frame_idx, "process_every": process_every},
+                        frame_idx=frame_idx,
+                        ts_ist=now_ist,
+                    )
 
                 state_machine.reset_session()
                 evening_auth_started   = False
@@ -991,12 +1031,6 @@ def main(
                 t0 = time.perf_counter()
 
                 if tracking_active:
-                    # Lazy-load detector on first activation (presence detected / door triggered).
-                    # Zero GPU VRAM is consumed outside active inference windows.
-                    if detector is None:
-                        detector = PoseDetector(device=device, half=half)
-                        print(f"[{cam_id}] Detector loaded: DIRECT INFERENCE mode.")
-
                     # Timing instrumentation: arrival -> inference start/end -> GPU mem
                     t_arrival = time.perf_counter()
                     gpu_before_mb = None
@@ -1680,7 +1714,7 @@ if __name__ == "__main__":
     parser.add_argument("video_source", nargs="?", default=None)
     parser.add_argument("--show", action="store_true")
     parser.add_argument("--scale-rois", action="store_true")
-    parser.add_argument("--process-every", type=int, default=3)
+    parser.add_argument("--process-every", type=int, default=2)
     parser.add_argument("--device", choices=["auto", "cuda", "cpu"], default="auto")
     parser.add_argument("--no-half", action="store_true")
     parser.add_argument("--show-all-detections", action="store_true")
