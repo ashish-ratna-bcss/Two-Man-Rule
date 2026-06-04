@@ -725,6 +725,54 @@ STREAMS_CONFIG = [
             "LOCKS_ROI": np.array([(3008.153477218224, 4.796163069544362), (3173.908872901677, 603.3573141486808), (2553.860911270982, 511.270983213429), (2360.4796163069536, 4.796163069544362)], np.int32),
             "DOOR_ROI": np.array([(3056.038388039567, 1.7266187050359705), (3258.356516768292, 878.4990619136959), (2549.5635678956824, 750.6954436450836), (2340.8345511091115, 1.7266187050359705)], np.int32)
         }
+    },
+    # Tamil Nadu streams Below
+
+    # Stream 21 - Coimbatore
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.251.16:8001/Streaming/Channels/2701",
+        "camera_id": "GF-40-CAM-27",
+        "site_id": "40",
+        "site_name": "coimbatore-store",
+        "closed_door_reference": "close_doors/closed_GF-40-CAM-27.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([[558, 1], [543, 62], [769, 1]], np.int32),
+            "STANDING_ZONE": np.array([[442, 550], [417, 743], [876, 727], [847, 541]], np.int32),
+            "LOCKS_ROI": np.array([[507, 106], [440, 527], [847, 527], [973, 131]], np.int32),
+            "DOOR_ROI": np.array([[525, 3], [427, 662], [835, 653], [1070, 10]], np.int32),
+            "INTERACTION_ZONE": np.array([[11, 19], [1899, 22], [1899, 1055], [20, 1060]], np.int32)
+        }
+    },
+    # Stream 22 - Chennai Annanagar
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@49.207.187.203:8001/Streaming/Channels/1501",
+        "camera_id": "GF-41-CAM-15",
+        "site_id": "41",
+        "site_name": "chennai-annanagar-store",
+        "closed_door_reference": "close_doors/closed_GF-41-CAM-15.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([[2421, 1310], [2071, 1614], [2785, 2129], [3066, 1779]], np.int32),
+            "INTERACTION_ZONE": np.array([[50, 57], [3798, 34], [3798, 2102], [50, 2111]], np.int32),
+            "LOCKS_ROI": np.array([[3508, 845], [2477, 389], [2283, 1268], [3149, 1733]], np.int32),
+            "DOOR_ROI": np.array([[3651, 389], [3061, 1867], [2223, 1402], [2527, 7]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2899, 111], [2879, 203], [3192, 182]], np.int32)
+        }
     }
 ]
 
