@@ -540,7 +540,7 @@ STREAMS_CONFIG = [
     # Stream 13 - Ongole
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.81.163:8001/Streaming/Channels/501",
-        "camera_id": "GF-27-CAM-05",
+        "camera_id": "GF-27-CAM-5",
         "site_id": "27",
         "site_name": "ongole-store",
         "closed_door_reference": "close_doors/closed_GF-27-CAM-05.jpg",
@@ -681,7 +681,7 @@ STREAMS_CONFIG = [
     # Stream 19 - UBCity Bangalore
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.89.106:8002/Streaming/Channels/401",
-        "camera_id": "FF-34-CAM-04",
+        "camera_id": "FF-34-CAM-4",
         "site_id": "34",
         "site_name": "ub-city-banglore-store",
         "closed_door_reference": "close_doors/closed_FF-34-CAM-04.jpg",
