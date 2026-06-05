@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity as ssim
 from typing import Dict, Optional
+from datetime import datetime
 import config
 
 class DoorVerifier:
@@ -69,9 +70,11 @@ class DoorVerifier:
         else:
             self.motion_threshold = raw_motion_thresh
 
+        self.debounce_seconds = float(debounce_threshold) / 25.0
         self.candidate_state = False      # False = CLOSED
-        self.consecutive_frames_agreed = 0
+        self.candidate_state_start_time = None
         self.stable_is_open = False
+        self.has_stabilized = False
         self.last_ssim = 1.0
         self.last_curr_mean = None
         self.last_intensity_diff = None
@@ -129,7 +132,7 @@ class DoorVerifier:
         self.last_visible_ratio = (visible_pixels / self._roi_area_pixels) if self._roi_area_pixels else 0.0
         return visible_mask
 
-    def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray, visible_mask: np.ndarray) -> bool:
+    def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray, visible_mask: np.ndarray, ts_ist: datetime) -> bool:
         if np.count_nonzero(visible_mask) == 0:
             return self.stable_is_open
 
@@ -147,6 +150,7 @@ class DoorVerifier:
         self.last_curr_mean = curr_mean
         self.last_intensity_diff = abs(curr_mean - self.reference_mean)
 
+        active_threshold = self.similarity_threshold
         if mean_diff < self.motion_threshold:
             raw_is_open = False
             self.last_ssim = 1.0
@@ -169,7 +173,6 @@ class DoorVerifier:
             # the camera loses physical contrast, artificially lowering the SSIM score.
             # We dynamically relax the threshold here to prevent false "OPEN" triggers,
             # while still allowing massive structural changes (actual openings) to be caught.
-            active_threshold = self.similarity_threshold
             if self.darkening_protection and 20.0 <= curr_mean < 45.0:
                 active_threshold = self.similarity_threshold * 0.85
 
@@ -181,10 +184,17 @@ class DoorVerifier:
                 raw_is_open = ssim_changed
 
         if raw_is_open == self.candidate_state:
-            self.consecutive_frames_agreed += 1
+            if self.candidate_state_start_time is None:
+                self.candidate_state_start_time = ts_ist
         else:
             self.candidate_state = raw_is_open
-            self.consecutive_frames_agreed = 1
+            self.candidate_state_start_time = ts_ist
+
+        if raw_is_open or self.candidate_state or self.stable_is_open:
+            print(f"[DEBUG DOOR] tick={self._frame_tick} raw={raw_is_open} cand={self.candidate_state} "
+                  f"SSIM={self.last_ssim:.3f} (thresh={active_threshold:.3f}) "
+                  f"Diff={self.last_mean_diff:.1f} (thresh={self.motion_threshold:.1f}) "
+                  f"VisibleRatio={self.last_visible_ratio:.2f}")
 
         self._frame_tick += 1
         if self._frame_tick % 30 == 0:
@@ -192,15 +202,24 @@ class DoorVerifier:
                 f"Intensity: {self.last_curr_mean:.1f} (Δ{self.last_intensity_diff:.1f}) | "
                 f"Stable: {'OPEN' if self.stable_is_open else 'CLOSED'}")
 
-        if self.consecutive_frames_agreed >= self.debounce_threshold:
-            if self.stable_is_open != self.candidate_state:
+        # Compute elapsed time in candidate state
+        if self.candidate_state_start_time is not None:
+            elapsed_seconds = (ts_ist - self.candidate_state_start_time).total_seconds()
+        else:
+            elapsed_seconds = 0.0
+
+        if elapsed_seconds >= self.debounce_seconds:
+            if not self.has_stabilized:
+                self.stable_is_open = self.candidate_state
+                self.has_stabilized = True
+                print(f"[DOOR] Initial stabilization: {'OPEN' if self.stable_is_open else 'CLOSED'}")
+            elif self.stable_is_open != self.candidate_state:
                 print(f"[DOOR] *** STATE CHANGE: {'OPEN' if self.candidate_state else 'CLOSED'} ***")
                 self.stable_is_open = self.candidate_state
-            self.consecutive_frames_agreed = self.debounce_threshold
 
         return self.stable_is_open
 
-    def verify(self, frame: np.ndarray, tracked_persons: Optional[Dict[int, Dict]] = None) -> bool:
+    def verify(self, frame: np.ndarray, tracked_persons: Optional[Dict[int, Dict]] = None, ts_ist: Optional[datetime] = None) -> bool:
         """Returns True if door is OPEN, False if CLOSED with motion gating."""
         try:
             curr_crop = frame[self.ry:self.ry+self.rh, self.rx:self.rx+self.rw]
@@ -211,7 +230,11 @@ class DoorVerifier:
             if self.last_visible_ratio < self.min_visible_ratio:
                 return self.stable_is_open
 
-            return self._run_verification(curr_patch, self.reference_patch, visible_mask)
+            if ts_ist is None:
+                from datetime import timezone, timedelta
+                ts_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+            return self._run_verification(curr_patch, self.reference_patch, visible_mask, ts_ist)
 
         except Exception as e:
             print(f"[DoorVerifier] Error: {e}")

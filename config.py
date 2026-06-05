@@ -585,11 +585,11 @@ STREAMS_CONFIG = [
     },
     # Stream 15 - Tirupathi
     {
-        "rtsp_url": "rtsp://Bluecloud:User%401964@202.83.31.24:8001/Streaming/Channels/1401",
-        "camera_id": "GF-23-CAM-14",
+        "rtsp_url": "rtsp://Bluecloud:User%401964@202.83.31.24:8001/Streaming/Channels/2101",
+        "camera_id": "GF-23-CAM-21",
         "site_id": "23",
         "site_name": "tirupathi-store",
-        "closed_door_reference": "close_doors/closed_GF-23-CAM-14.jpg",
+        "closed_door_reference": "close_doors/closed_GF-23-CAM-21.jpg",
         "ssim_threshold": 0.80,
         "debounce_threshold": 15,
         "intensity_threshold": 6,

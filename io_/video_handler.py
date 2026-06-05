@@ -209,8 +209,9 @@ class VideoHandler:
         self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.current_frame_idx = 0
 
-        self.thread = threading.Thread(target=self._update, daemon=True)
-        self.thread.start()
+        if self._is_rtsp:
+            self.thread = threading.Thread(target=self._update, daemon=True)
+            self.thread.start()
 
     def _open(self):
         if self._is_rtsp:
@@ -310,6 +311,21 @@ class VideoHandler:
     ) -> Tuple[bool, Optional[np.ndarray], Optional[datetime]]:
         if not self.running:
             return False, None, None
+
+        if not self._is_rtsp:
+            ret, frame = self.cap.read()
+            if not ret:
+                self.running = False
+                return False, None, None
+            
+            self.current_frame_idx += 1
+            self.last_frame_time = time.time()
+            if self._latest_frame_ist is None:
+                self._latest_frame_ist = datetime.now(IST)
+            else:
+                self._latest_frame_ist += timedelta(seconds=1.0 / max(self.fps, 1.0))
+            self.frame_ist = self._latest_frame_ist
+            return True, frame, self._latest_frame_ist
 
         if block:
             got_new = self._new_frame_event.wait(timeout)

@@ -298,7 +298,8 @@ def _label_verified_slot(
 
     anchor = state_machine.verified_anchors.get(slot)
     ref_bbox = state_machine.last_seen_bbox.get(slot)
-    height_ref_bbox = (getattr(state_machine, "slot_height_ref", {}).get(slot)) or ref_bbox
+    _h = getattr(state_machine, "slot_height_ref", {}).get(slot)
+    height_ref_bbox = ref_bbox if (_h is None or (hasattr(_h, '__len__') and len(_h) == 0)) else _h
     if anchor is None:
         return
 
@@ -414,9 +415,14 @@ def should_freeze_for_frame_quality(frame_quality_result, frame_quality_active: 
     )
 
 
-def _seconds_until_next_window() -> float:
+def _seconds_until_next_window(skip_active: bool = False) -> float:
     """Return seconds until the next morning (07:00) or evening (19:00) window begins.
-    Returns 0.0 immediately if we are already inside an active window.
+
+    Returns 0.0 immediately if we are already inside an active window, UNLESS
+    skip_active=True — then the currently-active window is treated as already
+    consumed and the result counts to the *following* window. This lets a
+    process that has already completed today's audit for the active window go
+    back to sleep instead of busy-restarting inside the same window.
     """
     now = datetime.now(IST)
     curr_min = now.hour * 60 + now.minute
@@ -426,14 +432,20 @@ def _seconds_until_next_window() -> float:
     evening_start_min = 19 * 60   # 19:00
     evening_end_min   = 23 * 60   # 23:00
 
-    # Already inside an active window → no sleep needed
+    # Already inside an active window → no sleep needed (unless skipping it)
     if morning_start_min <= curr_min <= morning_end_min:
-        return 0.0
-    if evening_start_min <= curr_min <= evening_end_min:
-        return 0.0
-
+        if not skip_active:
+            return 0.0
+        # Morning consumed → next is evening 19:00 today
+        target = now.replace(hour=19, minute=0, second=0, microsecond=0)
+    elif evening_start_min <= curr_min <= evening_end_min:
+        if not skip_active:
+            return 0.0
+        # Evening consumed → next is morning 07:00 tomorrow
+        tomorrow = now + timedelta(days=1)
+        target = tomorrow.replace(hour=7, minute=0, second=0, microsecond=0)
     # Before morning window → sleep until 07:00 today
-    if curr_min < morning_start_min:
+    elif curr_min < morning_start_min:
         target = now.replace(hour=7, minute=0, second=0, microsecond=0)
     # Between windows (11:01 – 18:59) → sleep until 19:00 today
     elif curr_min < evening_start_min:
@@ -444,6 +456,56 @@ def _seconds_until_next_window() -> float:
         target = tomorrow.replace(hour=7, minute=0, second=0, microsecond=0)
 
     return max(0.0, (target - now).total_seconds())
+
+
+def _current_window_name(now: datetime = None) -> str:
+    """Return 'morning'/'evening' if now is inside an audit window, else None."""
+    now = now or datetime.now(IST)
+    curr_min = now.hour * 60 + now.minute
+    if 7 * 60 <= curr_min <= 11 * 60:
+        return "morning"
+    if 19 * 60 <= curr_min <= 23 * 60:
+        return "evening"
+    return None
+
+
+# ── Durable per-stream, per-(date,window) completion markers ──────────────────
+# Once a stream finishes its morning/evening audit, it writes a marker file. A
+# respawn (supervisor / systemd / cron) that lands inside the same window reads
+# the marker and sleeps to the NEXT window instead of re-running the audit and
+# emitting duplicate captures. Markers are date+window keyed, so a new day
+# naturally clears them. In-memory flags alone cannot survive sys.exit(0).
+def _completion_marker_path(camera_id: str, date_str: str, window: str) -> str:
+    return os.path.join(
+        config.BASE_LOG_DIR, "window_state", camera_id, f"{date_str}_{window}.done"
+    )
+
+
+def _window_already_complete(camera_id: str, date_str: str, window: str) -> bool:
+    if not window:
+        return False
+    return os.path.exists(_completion_marker_path(camera_id, date_str, window))
+
+
+def _mark_window_complete(camera_id: str, date_str: str, window: str) -> None:
+    if not window:
+        return
+    path = _completion_marker_path(camera_id, date_str, window)
+    try:
+        marker_dir = os.path.dirname(path)
+        os.makedirs(marker_dir, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(datetime.now(IST).isoformat())
+        # Prune stale markers from previous days to keep the dir small.
+        for name in os.listdir(marker_dir):
+            if not name.startswith(date_str) and name.endswith(".done"):
+                try:
+                    os.remove(os.path.join(marker_dir, name))
+                except OSError:
+                    pass
+        print(f"[SYSTEM] {camera_id}: {window} audit marked complete for {date_str}.")
+    except Exception as e:
+        print(f"[SYSTEM] {camera_id}: failed to write completion marker: {e}")
 
 
 
@@ -564,13 +626,26 @@ def main(
     # torch import. Zero file handles, zero RTSP socket, zero VRAM until the
     # window is imminent. test_window / debug / show_all_detections bypass.
     if not test_window and not debug and not show_all_detections:
-        secs_to_window = _seconds_until_next_window()
-        if secs_to_window > 30.0:
+        # If a respawn lands inside a window this stream already completed today,
+        # treat that window as consumed and sleep to the next one. Done BEFORE the
+        # torch import below, so a completed window holds zero VRAM until the next.
+        _today = datetime.now(IST).strftime("%Y-%m-%d")
+        _active_win = _current_window_name()
+        if _active_win and _window_already_complete(cam_id, _today, _active_win):
+            secs_to_window = _seconds_until_next_window(skip_active=True)
             print(
-                f"[SYSTEM] {cam_id}: outside auth window. Sleeping {secs_to_window:.0f}s "
-                f"before opening RTSP + loading torch. Zero VRAM held."
+                f"[SYSTEM] {cam_id}: {_active_win} audit already completed for {_today}. "
+                f"Sleeping {secs_to_window:.0f}s to next window. Zero VRAM held."
             )
             time.sleep(secs_to_window)
+        else:
+            secs_to_window = _seconds_until_next_window()
+            if secs_to_window > 30.0:
+                print(
+                    f"[SYSTEM] {cam_id}: outside auth window. Sleeping {secs_to_window:.0f}s "
+                    f"before opening RTSP + loading torch. Zero VRAM held."
+                )
+                time.sleep(secs_to_window)
 
     evidence_dir = os.path.join(config.BASE_OUTPUT_DIR, site_name, cam_id)
 
@@ -797,8 +872,9 @@ def main(
         video_read_timeout = (
             float(getattr(config, "RTSP_READ_TIMEOUT_SECONDS", 1.5))
             if total_frames <= 0
-            else 0.1
+            else 2.0
         )
+
 
         while True:
             ret, frame, frame_ist = video.read_frame(block=True, timeout=video_read_timeout)
@@ -1207,29 +1283,6 @@ def main(
                                     f"{inactive_frames / max(fps, 1):.1f}s. Returning to SCANNER."
                                 )
 
-                is_door_open = False
-                ssim_val     = None
-                if door_verifier:
-                    if current_auth_window == "morning" and not morning_check_done:
-                        check_door = True
-                    elif current_auth_window == "evening" and not evening_check_done:
-                        check_door = True
-                    else:
-                        check_door = state_machine.should_check_door_state()
-
-                    check_door = check_door or debug
-                    if check_door:
-                        is_door_open = door_verifier.verify(frame, tracked_persons=tracked_persons)
-                    else:
-                        is_door_open = last_door_state if last_door_state is not None else False
-
-                    ssim_val        = door_verifier.get_last_ssim()
-                    intensity_val   = door_verifier.get_last_intensity()
-                    intensity_diff  = door_verifier.get_last_intensity_diff()
-                    door_transition_pending = door_verifier.is_transition_pending()
-                else:
-                    door_transition_pending = False
-
                 inference_ms = (time.perf_counter() - t0) * 1000.0
                 processed_frames_count += 1
 
@@ -1244,6 +1297,34 @@ def main(
                     )
                     t_loop_start           = time.perf_counter()
                     processed_frames_count = 0
+
+            # ===== DOOR VERIFICATION (every frame during active audit) =====
+            # Decoupled from the pose-inference throttle (`should_process_frame`)
+            # so a CLOSED<->OPEN transition is detected within one frame (+the
+            # debounce), instead of lagging by up to `process_every` frames. This
+            # keeps the captured snapshot frame and its timestamp in sync with the
+            # real door movement and with the unlocker-activity timeline. SSIM on
+            # the small DOOR_CORNER patch is cheap, so per-frame cost is minimal.
+            if door_verifier and (tracking_active or debug):
+                if current_auth_window == "morning" and not morning_check_done:
+                    check_door = True
+                elif current_auth_window == "evening" and not evening_check_done:
+                    check_door = True
+                else:
+                    check_door = state_machine.should_check_door_state()
+
+                check_door = check_door or debug
+                if check_door:
+                    is_door_open = door_verifier.verify(frame, tracked_persons=tracked_persons, ts_ist=now_ist)
+                else:
+                    is_door_open = last_door_state if last_door_state is not None else False
+
+                ssim_val        = door_verifier.get_last_ssim()
+                intensity_val   = door_verifier.get_last_intensity()
+                intensity_diff  = door_verifier.get_last_intensity_diff()
+                door_transition_pending = door_verifier.is_transition_pending()
+            elif not door_verifier:
+                door_transition_pending = False
 
             # ===== VISUALIZATION =====
             draw_rois(visualizer, frame, active_rois)
@@ -1440,9 +1521,12 @@ def main(
                 )
 
             door_transition = None
-            if last_door_state is not None and last_door_state != is_door_open:
-                door_transition = "CLOSED_TO_OPEN" if is_door_open else "OPEN_TO_CLOSED"
-            last_door_state = is_door_open
+            if door_verifier and not getattr(door_verifier, "has_stabilized", True):
+                last_door_state = None
+            else:
+                if last_door_state is not None and last_door_state != is_door_open:
+                    door_transition = "CLOSED_TO_OPEN" if is_door_open else "OPEN_TO_CLOSED"
+                last_door_state = is_door_open
 
             # ===== MORNING CHECK =====
             if is_morning_window and not morning_check_done:
@@ -1676,6 +1760,15 @@ def main(
         cv2.destroyAllWindows()
 
     if auth_check_complete:
+        # Persist a durable completion marker BEFORE exiting. A respawn that lands
+        # inside the same window reads this and sleeps to the next window instead
+        # of re-auditing and emitting duplicate captures. Skipped in test/debug
+        # modes so manual reruns are not suppressed.
+        if not test_window and not debug and not show_all_detections:
+            _completed_window = active_auth_window or _current_window_name()
+            _completed_date = datetime.now(IST).strftime("%Y-%m-%d")
+            _mark_window_complete(cam_id, _completed_date, _completed_window)
+
         # Hard-release GPU by exiting the process. empty_cache() does NOT free
         # the CUDA context, cuDNN workspace, or cuBLAS handles — only process
         # exit does (driver tears down ctx). Supervisor / outer loop respawns
