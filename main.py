@@ -849,6 +849,10 @@ def main(
         # Used as the evidence image for the unauthorized/timeout capture so it shows
         # the closing moment with people present, never an empty late live frame.
         evening_closing_frame        = None
+        # Wall-clock time of the OPEN->CLOSE instant. The second-unlocker timeout is
+        # measured in REAL seconds from this, not frame-time, so quality-freezes (which
+        # stop frame_idx advancing) cannot stretch the timeout past the window end.
+        evening_closing_time         = None
         last_door_state              = None
         is_door_open                 = False
         ssim_val                     = None
@@ -955,6 +959,37 @@ def main(
                         # Applies to BOTH morning and evening. Test/debug modes exempt —
                         # there the window never "leaves" (forced flags).
                         if not auth_check_complete and not test_window and not debug and not show_all_detections:
+                            # If evening was ARMED (door did OPEN->CLOSE) but no verdict
+                            # was reached before the window ended, emit the timeout
+                            # capture now using the cached closing-moment frame — so any
+                            # stream whose door closed always leaves a witness snapshot
+                            # instead of exiting silently. Streams whose door never
+                            # transitioned (never armed) still exit silently.
+                            if (active_auth_window == "evening" and evening_auth_started
+                                    and evening_closing_frame is not None):
+                                capture(
+                                    alert_system, evening_closing_frame,
+                                    "DOOR_CLOSE_UNAUTHORIZED_PRESENCE",
+                                    evidence_dir=evidence_dir, cam_id=cam_id,
+                                    site_name=site_name,
+                                    site_id=stream_config.get("site_id", ""),
+                                    details={
+                                        "authorized": False,
+                                        "p1_id": state_machine.session.get("id_a"),
+                                        "p2_id": state_machine.session.get("id_b"),
+                                        "wait_time": "window_end",
+                                        "reason": "second_unlocker_timeout",
+                                    },
+                                    check_type="Evening", visualizer=visualizer,
+                                    unlocker_labels=unlocker_labels,
+                                    tracked_persons=tracked_persons,
+                                    auth_result=auth_result, is_door_open=is_door_open,
+                                    persons_auth_status=False,
+                                    runtime_logger=runtime_logger,
+                                    frame_idx=frame_idx, frame_ist=now_ist,
+                                )
+                                print(f"[EVENING] {cam_id}: window ended while armed — "
+                                      f"saved closing-frame witness capture.")
                             print(
                                 f"[SYSTEM] {cam_id}: {active_auth_window} window ended with no "
                                 f"verdict. Releasing VRAM and exiting."
@@ -1649,6 +1684,7 @@ def main(
                     # unauthorized/timeout capture (so it shows who closed the door,
                     # never an empty late frame).
                     evening_closing_frame = clean_frame.copy()
+                    evening_closing_time = now_ist
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
                 if evening_auth_started:
@@ -1657,9 +1693,13 @@ def main(
                         or state_machine.session["door_closing_start_frame"] is None
                     ):
                         state_machine.session["door_closing_start_frame"] = frame_idx
+                    if evening_closing_time is None:
+                        evening_closing_time = now_ist
 
-                    elapsed_frames  = frame_idx - state_machine.session["door_closing_start_frame"]
-                    elapsed_seconds = elapsed_frames / fps
+                    # WALL-CLOCK timeout: real seconds since the door closed, so
+                    # quality-freezes (which halt frame_idx) cannot stretch it past
+                    # the window end. Frame marker kept for legacy/debug only.
+                    elapsed_seconds = (now_ist - evening_closing_time).total_seconds()
                     is_auth         = auth_result["authorized"]
 
                     if is_auth:
