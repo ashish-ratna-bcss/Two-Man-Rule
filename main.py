@@ -761,6 +761,10 @@ def main(
             stream_min_visible_ratio = min(max(stream_min_visible_ratio, 0.0), 1.0)
 
             stream_darkening = stream_config.get("darkening_protection", config.DOOR_DARKENING_PROTECTION)
+            stream_open_hysteresis = float(
+                stream_config.get("door_open_hysteresis", config.DOOR_OPEN_HYSTERESIS)
+            )
+            stream_open_hysteresis = min(max(stream_open_hysteresis, 0.0), 0.5)
 
             door_verifier = DoorVerifier(
                 stream_config["closed_door_reference"],
@@ -771,6 +775,7 @@ def main(
                 motion_threshold=stream_motion_thresh,
                 darkening_protection=bool(stream_darkening),
                 min_visible_ratio=stream_min_visible_ratio,
+                open_hysteresis=stream_open_hysteresis,
             )
             print(
                 f"[SYSTEM] Door verifier loaded with threshold {stream_ssim_thresh} "

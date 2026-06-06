@@ -57,6 +57,10 @@ SSIM_THRESHOLD = 0.92
 DOOR_DEBOUNCE_FRAMES = 20
 # Global toggle to enable special darkening (lights-off) protection
 DOOR_DARKENING_PROTECTION = True
+# SSIM margin by which entering OPEN is made stricter than returning to CLOSED
+# (hysteresis). Biases the door verifier toward CLOSED so a brief/marginal SSIM
+# dip cannot false-open. Per-stream override: "door_open_hysteresis".
+DOOR_OPEN_HYSTERESIS = 0.05
 # Minimum visible area ratio required before using occlusion-aware door verification
 DOOR_CORNER_MIN_VISIBLE_RATIO = 0.5
 

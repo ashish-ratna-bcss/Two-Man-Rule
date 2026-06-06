@@ -21,6 +21,7 @@ class DoorVerifier:
         motion_threshold: float = None,
         darkening_protection: bool = True,
         min_visible_ratio: float = None,
+        open_hysteresis: float = 0.05,
     ):
         reference = cv2.imread(reference_image_path)
         if reference is None:
@@ -53,6 +54,10 @@ class DoorVerifier:
         self.intensity_threshold = intensity_threshold if intensity_threshold is not None else 25
         self.debounce_threshold = debounce_threshold
         self.darkening_protection = bool(darkening_protection)
+        # Hysteresis: entering OPEN requires SSIM below (threshold - open_hysteresis);
+        # returning to CLOSED only needs SSIM back above the plain threshold. Biases
+        # the verifier toward CLOSED so a brief/marginal dip cannot false-open.
+        self.open_hysteresis = max(0.0, float(open_hysteresis))
         self.min_visible_ratio = (
             float(min_visible_ratio)
             if min_visible_ratio is not None
@@ -132,6 +137,33 @@ class DoorVerifier:
         self.last_visible_ratio = (visible_pixels / self._roi_area_pixels) if self._roi_area_pixels else 0.0
         return visible_mask
 
+    # Smooth twilight relaxation anchors. Above BRIGHT no relax (factor 1.0);
+    # at/below DARK maximum relax (MIN_FACTOR); linear in between — no cliff.
+    _RELAX_BRIGHT_MEAN = 60.0
+    _RELAX_DARK_MEAN = 20.0
+    _RELAX_MIN_FACTOR = 0.85
+
+    def _lighting_relax_factor(self, curr_mean: float) -> float:
+        """Continuous threshold-relax factor in [_RELAX_MIN_FACTOR, 1.0] by brightness."""
+        bright, dark, lo = self._RELAX_BRIGHT_MEAN, self._RELAX_DARK_MEAN, self._RELAX_MIN_FACTOR
+        if curr_mean >= bright:
+            return 1.0
+        if curr_mean <= dark:
+            return lo
+        # Linear interpolation: darker -> more relaxation (lower factor).
+        return lo + (1.0 - lo) * (curr_mean - dark) / (bright - dark)
+
+    def _ssim_indicates_open(self, ssim_val: float, active_threshold: float) -> bool:
+        """Hysteresis decision: harder to ENTER open than to return CLOSED.
+
+        When already CLOSED, SSIM must drop below (threshold - open_hysteresis) to
+        flip OPEN. When already OPEN, it stays open until SSIM recovers above the
+        plain threshold. Biases toward CLOSED so a marginal dip cannot false-open.
+        """
+        if self.stable_is_open:
+            return ssim_val < active_threshold
+        return ssim_val < (active_threshold - self.open_hysteresis)
+
     def _run_verification(self, curr_patch: np.ndarray, reference_patch: np.ndarray, visible_mask: np.ndarray, ts_ist: datetime) -> bool:
         if np.count_nonzero(visible_mask) == 0:
             return self.stable_is_open
@@ -168,15 +200,18 @@ class DoorVerifier:
             self.last_ssim = float(ssim(reference_patch, composite_patch, full=False, data_range=255))
             self.last_ssim = max(0.0, min(1.0, self.last_ssim))
 
-            # Twilight Protection Layer:
-            # In dim ambient light (e.g., early morning before lights are on), 
-            # the camera loses physical contrast, artificially lowering the SSIM score.
-            # We dynamically relax the threshold here to prevent false "OPEN" triggers,
-            # while still allowing massive structural changes (actual openings) to be caught.
-            if self.darkening_protection and 20.0 <= curr_mean < 45.0:
-                active_threshold = self.similarity_threshold * 0.85
+            # Twilight Protection Layer (smooth):
+            # In dim ambient light (e.g. early morning before lights are on) the camera
+            # loses physical contrast, artificially lowering SSIM. We relax the threshold
+            # by a factor that varies CONTINUOUSLY with brightness — no hard band edge —
+            # so a patch whose intensity rides a boundary (e.g. ~45) cannot flicker the
+            # threshold and flip the door state. Bright frames get no relaxation; a real
+            # (large) structural change still trips because relaxation is bounded.
+            if self.darkening_protection:
+                active_threshold = self.similarity_threshold * self._lighting_relax_factor(curr_mean)
 
-            ssim_changed = self.last_ssim < active_threshold
+            # Hysteresis: harder to ENTER open than to stay/return CLOSED.
+            ssim_changed = self._ssim_indicates_open(self.last_ssim, active_threshold)
 
             if curr_mean < 20.0 and self.darkening_protection:
                 raw_is_open = False
