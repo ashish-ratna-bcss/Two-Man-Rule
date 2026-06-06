@@ -938,6 +938,20 @@ def main(
                             frame_idx=frame_idx,
                             ts_ist=now_ist,
                         )
+                        # Window ended with no verdict. Any stream still alive here is
+                        # by definition no-verdict — a concluded audit already exited.
+                        # Mark the window handled and exit so the detector's VRAM is
+                        # released: no stream/model lingers past its window. Reuses the
+                        # post-loop completion teardown (mark .done + empty_cache + exit).
+                        # Applies to BOTH morning and evening. Test/debug modes exempt —
+                        # there the window never "leaves" (forced flags).
+                        if not auth_check_complete and not test_window and not debug and not show_all_detections:
+                            print(
+                                f"[SYSTEM] {cam_id}: {active_auth_window} window ended with no "
+                                f"verdict. Releasing VRAM and exiting."
+                            )
+                            auth_check_complete = True
+                            break
                 else:
                     print(f"[SYSTEM] [{_transition_ist} IST] Starting {current_auth_window} auth window. Detector already hot. Fresh session.")
                     runtime_logger.write_event(
