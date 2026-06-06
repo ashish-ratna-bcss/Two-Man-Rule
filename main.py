@@ -845,6 +845,10 @@ def main(
         active_auth_window           = None
         auth_success_logged_by_window = {"morning": False, "evening": False}
         evening_auth_started         = False
+        # Frame cached at the OPEN->CLOSE instant (witness of who closed the door).
+        # Used as the evidence image for the unauthorized/timeout capture so it shows
+        # the closing moment with people present, never an empty late live frame.
+        evening_closing_frame        = None
         last_door_state              = None
         is_door_open                 = False
         ssim_val                     = None
@@ -1465,10 +1469,13 @@ def main(
             # ===== EVENTS + CAPTURE =====
             site_id = stream_config.get("site_id", "")
 
-            def _capture(event_type, details, check_type="System"):
-                # Always captures the live frame at event-trigger time — no stale snapshot ever used.
+            def _capture(event_type, details, check_type="System", frame_override=None):
+                # Defaults to the live frame at event-trigger time. frame_override lets
+                # the evening timeout use the cached door-closing frame (witness of who
+                # closed the door) instead of an empty late live frame.
+                cap_frame = frame_override if frame_override is not None else clean_frame
                 capture(
-                    alert_system, clean_frame, event_type,
+                    alert_system, cap_frame, event_type,
                     evidence_dir=evidence_dir,
                     cam_id=cam_id,
                     site_name=site_name,
@@ -1509,7 +1516,12 @@ def main(
                         )
                         _capture(
                             same_id_event_type,
-                            {"reason": "same_person_tried_both_slots"},
+                            {
+                                "authorized": False,
+                                "p1_id": state_machine.session.get("id_a"),
+                                "p2_id": state_machine.session.get("id_b"),
+                                "reason": "same_person_tried_both_slots",
+                            },
                             current_auth_window or "Security",
                         )
 
@@ -1633,6 +1645,10 @@ def main(
                     state_machine.reset_session()
                     evening_auth_started = True
                     state_machine.session["door_closing_start_frame"] = frame_idx
+                    # Cache the closing-moment frame as witness evidence for the
+                    # unauthorized/timeout capture (so it shows who closed the door,
+                    # never an empty late frame).
+                    evening_closing_frame = clean_frame.copy()
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
                 if evening_auth_started:
@@ -1662,13 +1678,15 @@ def main(
                         break
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
+                        # Use the cached door-closing frame as witness evidence (who
+                        # closed the door), not the empty live frame minutes later.
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
                             "p1_id":      state_machine.session.get("id_a"),
                             "p2_id":      state_machine.session.get("id_b"),
                             "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
                             "reason":     "second_unlocker_timeout",
-                        }, "Evening")
+                        }, "Evening", frame_override=evening_closing_frame)
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False
