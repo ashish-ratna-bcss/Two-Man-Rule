@@ -78,6 +78,11 @@ class _PyAVRTSPCapture:
             "buffer_size": "4096000",
             "max_delay": str(max(0, int(latency_ms)) * 1000),  # microseconds
             "stimeout": str(int(startup_timeout_seconds * 1_000_000)),
+            # Drop corrupt/partial frames at the FFmpeg layer so torn/blocky frames
+            # from RTSP packet loss never reach the decoder output — the downstream
+            # frame-quality guard then sees far fewer bad frames per stream.
+            "fflags": "discardcorrupt",
+            "err_detect": "crccheck",
         }
 
         try:
