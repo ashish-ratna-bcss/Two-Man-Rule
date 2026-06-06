@@ -1242,7 +1242,10 @@ def main(
 
                         auth_active = (
                             current_auth_window == "morning"
-                            or current_auth_window == "evening"
+                            # Evening: detection is GATED on the OPEN->CLOSE transition.
+                            # Until the door closes (evening_auth_started), no unlocker
+                            # candidate/slot/tag/timer is touched — pure scan only.
+                            or (current_auth_window == "evening" and evening_auth_started)
                             or (current_auth_window is None and (debug or show_all_detections))
                         )
 
@@ -1479,8 +1482,14 @@ def main(
                     state_machine.session["captured_violations"].append("SAME_ID")
                     if current_auth_window != "morning":
                         persons_auth_status = False
+                        # Label by LIVE door state — evening same-person violations fire
+                        # post-close, so the capture must not hard-label DOOR_OPEN.
+                        same_id_event_type = (
+                            "DOOR_OPEN_UNAUTHORIZED_PRESENCE" if is_door_open
+                            else "DOOR_CLOSE_UNAUTHORIZED_PRESENCE"
+                        )
                         _capture(
-                            "DOOR_OPEN_UNAUTHORIZED_PRESENCE",
+                            same_id_event_type,
                             {"reason": "same_person_tried_both_slots"},
                             current_auth_window or "Security",
                         )
@@ -1599,7 +1608,10 @@ def main(
             # ===== EVENING CHECK =====
             elif is_evening_window and not evening_check_done:
                 if door_transition == "OPEN_TO_CLOSED" and not evening_auth_started:
-                    # Do not reset the session here; allow authentications that happened just prior to the door closing to persist.
+                    # HARD RESET at the OPEN->CLOSE transition: unlocker detection must
+                    # start 100% fresh. Nothing accumulated while the door was open may
+                    # survive — no pre-close candidate, slot, tag, or timer carries over.
+                    state_machine.reset_session()
                     evening_auth_started = True
                     state_machine.session["door_closing_start_frame"] = frame_idx
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
