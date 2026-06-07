@@ -64,6 +64,23 @@ DOOR_OPEN_HYSTERESIS = 0.05
 # Minimum visible area ratio required before using occlusion-aware door verification
 DOOR_CORNER_MIN_VISIBLE_RATIO = 0.5
 
+# ---- Bright-washout structural veto (Fix 1) ----
+# When the door ROI brightness has shifted far from the reference (dawn sunlight /
+# overexposure), raw-grayscale SSIM collapses even though the door is shut. In that
+# regime we additionally require a GRADIENT (structural) drop before reading OPEN: a
+# pure lighting wash leaves edges intact (high grad-SSIM) and is vetoed, while a real
+# opening destroys the door-edge structure (low grad-SSIM) and still opens. Below the
+# intensity delta the door logic is unchanged (no regression on normal-light opens).
+DOOR_WASHOUT_INTENSITY_DELTA = 25.0   # |curr_mean - ref_mean| above which veto is active
+DOOR_GRAD_SSIM_OPEN_MAX = 0.85        # grad-SSIM must be below this to confirm a real open
+
+# ---- Same-person appearance gate (Fix 5) ----
+# Slot-b candidate whose appearance signature (normalized HSV histogram of its bbox)
+# is too similar to slot-a is the same physical person re-entering under a new track
+# id (ByteTrack id-switch) — flag SAME_ID instead of authorizing a second unlocker.
+APPEARANCE_GATE_ENABLED = True
+DOOR_SAME_PERSON_APPEARANCE_SIM = 0.90
+
 # ============ ALERT SYSTEM ============
 
 # ============ OCCLUSION FALLBACK ============
@@ -117,7 +134,7 @@ LKG_MAX_CONSECUTIVE_TIMEOUTS: int = 15
 # ============ FRAME QUALITY / VIDEO DEGRADATION ============
 FRAME_QUALITY_ENABLED = True
 FRAME_QUALITY_DEGRADED_AFTER_FRAMES = 15
-FRAME_QUALITY_RECOVERY_GOOD_FRAMES = 2
+FRAME_QUALITY_RECOVERY_GOOD_FRAMES = 20
 FRAME_QUALITY_STALE_AFTER_FRAMES = 90
 
 

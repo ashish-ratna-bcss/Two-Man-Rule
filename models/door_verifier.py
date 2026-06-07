@@ -58,6 +58,11 @@ class DoorVerifier:
         # returning to CLOSED only needs SSIM back above the plain threshold. Biases
         # the verifier toward CLOSED so a brief/marginal dip cannot false-open.
         self.open_hysteresis = max(0.0, float(open_hysteresis))
+        # Bright-washout structural veto (Fix 1): only active when the ROI brightness
+        # has shifted far from reference. See config for rationale.
+        self._washout_intensity_delta = float(getattr(config, "DOOR_WASHOUT_INTENSITY_DELTA", 25.0))
+        self._grad_ssim_open_max = float(getattr(config, "DOOR_GRAD_SSIM_OPEN_MAX", 0.85))
+        self.last_grad_ssim = 1.0
         self.min_visible_ratio = (
             float(min_visible_ratio)
             if min_visible_ratio is not None
@@ -153,6 +158,41 @@ class DoorVerifier:
         # Linear interpolation: darker -> more relaxation (lower factor).
         return lo + (1.0 - lo) * (curr_mean - dark) / (bright - dark)
 
+    def _gradient_ssim(self, ref_patch: np.ndarray, comp_patch: np.ndarray) -> float:
+        """SSIM on Sobel-gradient-magnitude images — keys on STRUCTURE, not brightness.
+
+        A uniform lighting shift (dawn washout / overexposure) leaves edges intact, so
+        gradient-SSIM stays high; a real door opening removes/changes the door-edge
+        structure, so it drops. Used to veto bright-washout false-opens.
+        """
+        def grad(p: np.ndarray) -> np.ndarray:
+            gx = cv2.Sobel(p, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(p, cv2.CV_32F, 0, 1, ksize=3)
+            return cv2.magnitude(gx, gy)
+
+        gr = grad(ref_patch)
+        gc = grad(comp_patch)
+        denom = float(max(gr.max(), gc.max(), 1.0))
+        gr_u = (gr / denom * 255.0).astype(np.uint8)
+        gc_u = (gc / denom * 255.0).astype(np.uint8)
+        win = min(7, gr_u.shape[0], gr_u.shape[1])
+        if win < 3:
+            return 1.0
+        if win % 2 == 0:
+            win -= 1
+        val = float(ssim(gr_u, gc_u, full=False, data_range=255, win_size=win))
+        return max(0.0, min(1.0, val))
+
+    def reset_stabilization(self) -> None:
+        """Re-enter the settle period after a frame-quality gap (freeze/corruption
+        recovery). A post-recovery frame must not be allowed to emit a transition
+        immediately; the door re-baselines over a fresh debounce window. The last
+        stable state is preserved so re-settling itself causes no spurious transition.
+        """
+        self.has_stabilized = False
+        self.candidate_state = self.stable_is_open
+        self.candidate_state_start_time = None
+
     def _ssim_indicates_open(self, ssim_val: float, active_threshold: float) -> bool:
         """Hysteresis decision: harder to ENTER open than to return CLOSED.
 
@@ -217,6 +257,16 @@ class DoorVerifier:
                 raw_is_open = False
             else:
                 raw_is_open = ssim_changed
+                # Bright-washout structural veto (Fix 1): only when ROI brightness has
+                # shifted far from reference. A pure lighting wash keeps edges intact
+                # (high grad-SSIM) → veto the open; a real opening changes structure
+                # (low grad-SSIM) → pass. Normal-light opens (small intensity_diff) are
+                # untouched, so currently-good streams keep identical behavior.
+                if raw_is_open and self.last_intensity_diff is not None \
+                        and self.last_intensity_diff > self._washout_intensity_delta:
+                    self.last_grad_ssim = self._gradient_ssim(reference_patch, composite_patch)
+                    if self.last_grad_ssim >= self._grad_ssim_open_max:
+                        raw_is_open = False
 
         if raw_is_open == self.candidate_state:
             if self.candidate_state_start_time is None:

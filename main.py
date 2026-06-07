@@ -853,6 +853,12 @@ def main(
         # measured in REAL seconds from this, not frame-time, so quality-freezes (which
         # stop frame_idx advancing) cannot stretch the timeout past the window end.
         evening_closing_time         = None
+        # Fix 4: whether the cached closing frame actually contained people, plus the
+        # most recent frame that had >=1 detection. If the door OPEN->CLOSE instant was
+        # spurious (empty scene), the timeout/window-end witness falls back to the last
+        # frame with people instead of saving an empty image.
+        evening_closing_had_persons  = False
+        last_frame_with_persons      = None
         last_door_state              = None
         is_door_open                 = False
         ssim_val                     = None
@@ -967,8 +973,11 @@ def main(
                             # transitioned (never armed) still exit silently.
                             if (active_auth_window == "evening" and evening_auth_started
                                     and evening_closing_frame is not None):
+                                window_end_witness = evening_closing_frame
+                                if not evening_closing_had_persons and last_frame_with_persons is not None:
+                                    window_end_witness = last_frame_with_persons
                                 capture(
-                                    alert_system, evening_closing_frame,
+                                    alert_system, window_end_witness,
                                     "DOOR_CLOSE_UNAUTHORIZED_PRESENCE",
                                     evidence_dir=evidence_dir, cam_id=cam_id,
                                     site_name=site_name,
@@ -1068,6 +1077,11 @@ def main(
                 )
                 frame_quality_was_frozen = False
                 video_quality_degraded_logged = False
+                # Fix 2: re-baseline the door after a quality gap so the first
+                # post-recovery frame (often a dawn washout) cannot immediately emit a
+                # false transition. Door re-settles over a fresh debounce window.
+                if door_verifier is not None:
+                    door_verifier.reset_stabilization()
 
             if should_freeze_for_frame_quality(frame_quality_result, frame_quality_active):
                 last_processed_frame_idx = frame_idx
@@ -1298,6 +1312,11 @@ def main(
 
                         tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
 
+                        # Fix 4: remember the latest frame that actually had people, for
+                        # use as a witness fallback when a closing frame is empty.
+                        if tracked_persons:
+                            last_frame_with_persons = clean_frame.copy()
+
                         auth_active = (
                             current_auth_window == "morning"
                             # Evening: detection is GATED on the OPEN->CLOSE transition.
@@ -1309,7 +1328,7 @@ def main(
 
                         if auth_active:
                             occupancy_status = state_machine.update_occupancy(tracked_persons, frame_step=frame_step)
-                            state_machine.update_timers(tracked_persons, frame_step=frame_step)
+                            state_machine.update_timers(tracked_persons, frame_step=frame_step, frame=clean_frame)
                             auth_result = state_machine.check_authorization()
                         else:
                             state_machine.active_ids_in_zone = set()
@@ -1553,7 +1572,8 @@ def main(
                             same_id_event_type,
                             {
                                 "authorized": False,
-                                "p1_id": state_machine.session.get("id_a"),
+                                "p1_id": state_machine.session.get("id_a")
+                                         or state_machine.session.get("same_id_offender"),
                                 "p2_id": state_machine.session.get("id_b"),
                                 "reason": "same_person_tried_both_slots",
                             },
@@ -1613,7 +1633,8 @@ def main(
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
-                            "p1_id": state_machine.session.get("id_a"),
+                            "p1_id": state_machine.session.get("id_a")
+                                     or state_machine.session.get("same_id_offender"),
                             "p2_id": state_machine.session.get("id_b"),
                             "transition": "CLOSED_TO_OPEN",
                             "both_in_interaction_zone": both_in_interaction,
@@ -1684,6 +1705,7 @@ def main(
                     # unauthorized/timeout capture (so it shows who closed the door,
                     # never an empty late frame).
                     evening_closing_frame = clean_frame.copy()
+                    evening_closing_had_persons = bool(tracked_persons)
                     evening_closing_time = now_ist
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
@@ -1719,14 +1741,19 @@ def main(
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
                         # Use the cached door-closing frame as witness evidence (who
-                        # closed the door), not the empty live frame minutes later.
+                        # closed the door), not the empty live frame minutes later. If
+                        # that closing frame was empty (spurious transition), fall back
+                        # to the last frame that actually had people (Fix 4).
+                        timeout_witness = evening_closing_frame
+                        if not evening_closing_had_persons and last_frame_with_persons is not None:
+                            timeout_witness = last_frame_with_persons
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
                             "p1_id":      state_machine.session.get("id_a"),
                             "p2_id":      state_machine.session.get("id_b"),
                             "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
                             "reason":     "second_unlocker_timeout",
-                        }, "Evening", frame_override=evening_closing_frame)
+                        }, "Evening", frame_override=timeout_witness)
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False

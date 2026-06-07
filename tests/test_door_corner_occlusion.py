@@ -37,7 +37,7 @@ def test_clear_roi_reaches_verification(tmp_path, monkeypatch):
     frame = np.full((100, 100, 3), 100, dtype=np.uint8)
     calls = []
 
-    def _capture(curr_patch, reference_patch, visible_mask):
+    def _capture(curr_patch, reference_patch, visible_mask, ts_ist=None):
         calls.append((curr_patch.copy(), reference_patch.copy()))
         return True
 

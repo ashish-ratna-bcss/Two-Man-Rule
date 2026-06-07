@@ -1,6 +1,7 @@
 import math
 from typing import Dict, Optional, Set, Tuple
 
+import cv2
 import numpy as np
 
 import config
@@ -76,6 +77,7 @@ class DualAuthStateMachine:
 
         # Frames since each verified slot was last directly seen — drives dynamic remap radius
         self.slot_lost_frames = {"a": 0, "b": 0}
+        self._current_frame = None  # set each update_timers() for the appearance gate
 
         # Departure tracking: frames since verified unlocker last found in tracked_persons (any pose).
         # Once slot_departed[slot] = True it is irreversible for this session — a different physical
@@ -148,8 +150,9 @@ class DualAuthStateMachine:
     # ================================================================
     # SEQUENTIAL UNLOCK TIMERS
     # ================================================================
-    def update_timers(self, tracked_persons: Dict[int, Dict], frame_step: int = 1):
+    def update_timers(self, tracked_persons: Dict[int, Dict], frame_step: int = 1, frame=None):
         frame_step = max(int(frame_step), 1)
+        self._current_frame = frame
         pose_results = {}
         interacting_ids: Set[int] = set()
 
@@ -342,6 +345,9 @@ class DualAuthStateMachine:
                         if timer >= self.min_unlock_frames:
                             print(f"[VIOLATION] P1 (ID {id_a}) confirmed SAME_ID re-attempt after {self.min_unlock_frames / self.fps:.1f}s")
                             self.session["violation_type"] = "SAME_ID"
+                            # Fix 3: snapshot the offending id NOW; the capture fires
+                            # later at CLOSED_TO_OPEN by when id_a/id_b may be cleared.
+                            self.session["same_id_offender"] = id_a
                     else:
                         grace = self.session.get("same_id_return_grace_frames", 0)
                         timer = self.session.get("same_id_return_timer_frames", 0)
@@ -438,6 +444,8 @@ class DualAuthStateMachine:
         if candidate_id in excluded_ids:
             self._reset_candidate(slot)
             self.session["violation_type"] = "SAME_ID"
+            # Fix 3: snapshot the offending id at detection for the evidence capture.
+            self.session["same_id_offender"] = candidate_id
             return
 
         if candidate_id not in interacting_ids:
@@ -465,10 +473,16 @@ class DualAuthStateMachine:
             self.slot_anchors[slot] = self._smooth_anchor(self.slot_anchors[slot], pose_results[candidate_id]["anchor"])
 
             if self.session[timer_key] >= self.max_unlock_frames:
+                if self._appearance_blocks_second_unlocker(slot, candidate_id, self._current_frame, tracked_persons):
+                    return
+                self._store_appearance_if_slot_a(slot, candidate_id, self._current_frame, tracked_persons)
                 self._complete_unlock_slot(slot)
             return
 
         if current_timer >= self.min_unlock_frames:
+            if self._appearance_blocks_second_unlocker(slot, candidate_id, self._current_frame, tracked_persons):
+                return
+            self._store_appearance_if_slot_a(slot, candidate_id, self._current_frame, tracked_persons)
             self._complete_unlock_slot(slot)
             return
 
@@ -509,6 +523,66 @@ class DualAuthStateMachine:
             f"after {self.session[timer_seconds_key]:.1f}s unlock interaction"
         )
 
+    @staticmethod
+    def _appearance_signature(frame, bbox) -> Optional[np.ndarray]:
+        """Cheap appearance descriptor: normalized H-S histogram of the bbox crop.
+        Two different people (different clothing) yield dissimilar histograms; the
+        same person under a switched track id yields a near-identical one.
+        """
+        if frame is None or bbox is None or len(bbox) < 4:
+            return None
+        h, w = frame.shape[:2]
+        x1 = max(0, int(bbox[0])); y1 = max(0, int(bbox[1]))
+        x2 = min(w, int(bbox[2])); y2 = min(h, int(bbox[3]))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [32, 32], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+        return hist
+
+    @staticmethod
+    def _appearance_similarity(sig_a: Optional[np.ndarray], sig_b: Optional[np.ndarray]) -> float:
+        if sig_a is None or sig_b is None:
+            return 0.0
+        return float(cv2.compareHist(sig_a, sig_b, cv2.HISTCMP_CORREL))
+
+    def _store_appearance_if_slot_a(self, slot, candidate_id, frame, tracked_persons):
+        if slot != "a":
+            return
+        bbox = (tracked_persons or {}).get(candidate_id, {}).get("bbox")
+        sig = self._appearance_signature(frame, bbox)
+        if sig is not None:
+            self.body_fingerprints["a"] = {"hsv": sig}
+
+    def _appearance_blocks_second_unlocker(self, slot, candidate_id, frame, tracked_persons) -> bool:
+        """Fix 5: a slot-b candidate whose appearance matches the verified P1 is the
+        same physical person re-entering under a switched track id (ByteTrack id-switch)
+        — flag SAME_ID instead of authorizing a bogus second unlocker. Two genuinely
+        different people stay below the similarity threshold and authorize normally.
+        """
+        if slot != "b" or not getattr(config, "APPEARANCE_GATE_ENABLED", False):
+            return False
+        fp_a = self.body_fingerprints.get("a")
+        if not fp_a or fp_a.get("hsv") is None or frame is None:
+            return False
+        bbox = (tracked_persons or {}).get(candidate_id, {}).get("bbox")
+        sig_b = self._appearance_signature(frame, bbox)
+        if sig_b is None:
+            return False
+        sim = self._appearance_similarity(fp_a["hsv"], sig_b)
+        if sim >= float(getattr(config, "DOOR_SAME_PERSON_APPEARANCE_SIM", 0.90)):
+            print(f"[VIOLATION] Slot-b candidate {candidate_id} appearance matches P1 "
+                  f"(sim={sim:.2f}) — SAME_ID id-switch")
+            self.session["violation_type"] = "SAME_ID"
+            self.session["same_id_offender"] = self.session.get("id_a") or candidate_id
+            self._reset_candidate(slot)
+            return True
+        return False
+
     def _reset_candidate(self, slot: str):
         self.session[f"candidate_{slot}"] = None
         self.session[f"timer_{slot}_frames"] = 0
@@ -526,6 +600,7 @@ class DualAuthStateMachine:
         self.all_unlocker_ids = {"P1_unlocker": set(), "P2_unlocker": set()}
         self.body_fingerprints = {"a": None, "b": None}
         self.slot_lost_frames = {"a": 0, "b": 0}
+        self._current_frame = None
         self.last_seen_bbox = {"a": None, "b": None}
         self.slot_height_ref = {"a": None, "b": None}
         self.candidate_bbox = {"a": None, "b": None}
