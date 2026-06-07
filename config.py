@@ -74,11 +74,15 @@ DOOR_CORNER_MIN_VISIBLE_RATIO = 0.5
 DOOR_WASHOUT_INTENSITY_DELTA = 25.0   # |curr_mean - ref_mean| above which veto is active
 DOOR_GRAD_SSIM_OPEN_MAX = 0.85        # grad-SSIM must be below this to confirm a real open
 
-# ---- Same-person appearance gate (Fix 5) ----
-# Slot-b candidate whose appearance signature (normalized HSV histogram of its bbox)
-# is too similar to slot-a is the same physical person re-entering under a new track
-# id (ByteTrack id-switch) — flag SAME_ID instead of authorizing a second unlocker.
-APPEARANCE_GATE_ENABLED = True
+# ---- Same-person appearance gate (Fix 5) — DISABLED ----
+# A normalized HSV color histogram cannot work here: all staff wear the SAME uniform,
+# so two DIFFERENT people score as highly similar → the gate would false-flag a legit
+# second unlocker as SAME_ID and block real dual-auth. Multi-angle cameras make a flat
+# color descriptor worse still. Superseded by a deep Re-ID tracker (BoT-SORT) that
+# keeps a stable identity per person through occlusion/re-entry, so the existing
+# excluded-id SAME_ID logic catches the same body without a color match. Left wired but
+# OFF; do not enable in a same-uniform deployment.
+APPEARANCE_GATE_ENABLED = False
 DOOR_SAME_PERSON_APPEARANCE_SIM = 0.90
 
 # ============ ALERT SYSTEM ============
