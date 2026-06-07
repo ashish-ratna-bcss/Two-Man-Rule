@@ -653,6 +653,7 @@ def main(
     # first place CUDA driver may initialize for this process.
     from models.pose_detector import PoseDetector
     from models.tracker import PersonTracker
+    from models.reid_extractor import ReIDExtractor
 
     runtime_logger = RuntimeEventLogger(
         base_dir=config.BASE_LOG_DIR,
@@ -704,6 +705,10 @@ def main(
     )
 
     tracker      = PersonTracker()
+    # Deep appearance Re-ID extractor — same per-stream/per-window lifecycle as the
+    # detector (freed by the window-end sys.exit CUDA teardown). Degrades to the
+    # tracker's pose-keypoint Re-ID if the weights file is absent.
+    reid_extractor = ReIDExtractor(device=device)
     roi_manager  = ROIManager()
 
     # LKG (last-known-good) detection cache — guards against inference timeouts.
@@ -1310,7 +1315,12 @@ def main(
                             _tag = f"P{1 if _s == 'a' else 2}_unlocker"
                             _verified_ids.update(state_machine.all_unlocker_ids.get(_tag, set()))
 
-                        tracked_persons = tracker.update(detections, protected_ids=_verified_ids)
+                        reid_embeddings = reid_extractor.embed(
+                            clean_frame, [d["bbox"] for d in detections]
+                        ) if detections else None
+                        tracked_persons = tracker.update(
+                            detections, protected_ids=_verified_ids, embeddings=reid_embeddings
+                        )
 
                         # Fix 4: remember the latest frame that actually had people, for
                         # use as a witness fallback when a closing frame is empty.

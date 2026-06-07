@@ -95,6 +95,20 @@ HEAD_TO_LOCKS_MAX_PIXELS = 150  # Max distance from head to LOCKS_ROI polygon
 TRACK_BUFFER = 30
 TRACK_THRESH = 0.5
 
+# ---- Deep appearance Re-ID (Option A: augment the pose-keypoint matcher) ----
+# A deep OSNet embedding (build/face/gait/texture, trained cross-view) re-links a
+# person across camera angle and long gaps where pose-keypoint matching fails — the
+# fix for same-uniform, multi-angle id-switches. When the model is unavailable the
+# tracker falls back to the existing pose-keypoint Re-ID, so nothing breaks if the
+# weights file is absent or the kill-switch is off.
+REID_APPEARANCE_ENABLED = True
+REID_MODEL_PATH = "models/weights/osnet_x0_25_msmt17.onnx"
+# Cosine-distance ceiling for accepting a re-link. Higher = more aggressive re-link
+# (catches one-person-does-both-unlocks, the security-critical miss) at some risk of
+# merging two similar staff. Tune against real footage.
+REID_COSINE_MAX = 0.40
+REID_GALLERY_EMA = 0.9   # EMA weight for the per-track embedding template
+
 # ============ MODEL PATHS ============
 YOLO_POSE_MODEL = "yolov8n-pose.pt"  # Lightweight nano model, ~6.5MB
 

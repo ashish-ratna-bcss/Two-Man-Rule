@@ -19,6 +19,11 @@ class PersonTracker:
         self.lost_id_frames = {}
         self.max_lost_frames = config.TRACK_BUFFER
         self.last_known_bbox = {}  # true_id → last confirmed bbox
+        # Deep appearance Re-ID: per-track L2-normalized embedding template (EMA).
+        self.embedding_gallery = {}  # true_id → np.ndarray(D,)
+        self._reid_enabled = bool(getattr(config, "REID_APPEARANCE_ENABLED", False))
+        self._reid_cos_max = float(getattr(config, "REID_COSINE_MAX", 0.40))
+        self._reid_ema = float(getattr(config, "REID_GALLERY_EMA", 0.9))
 
     def _compute_keypoint_distance(
         self, kpts1: np.ndarray, kpts2: np.ndarray, bbox_height: float = None
@@ -58,6 +63,11 @@ class PersonTracker:
         return avg_kpts
 
     @staticmethod
+    def _cos_dist(a: np.ndarray, b: np.ndarray) -> float:
+        """Cosine distance in [0, 2] for L2-normalized vectors (0 = identical)."""
+        return 1.0 - float(np.dot(a, b))
+
+    @staticmethod
     def _bbox_height(bbox) -> float:
         if bbox is None or len(bbox) < 4:
             return 0.0
@@ -69,7 +79,8 @@ class PersonTracker:
             return None
         return ((bbox[0] + bbox[2]) / 2.0, float(bbox[3]))
 
-    def update(self, detections: List[Dict], protected_ids: set = None) -> Dict[int, Dict]:
+    def update(self, detections: List[Dict], protected_ids: set = None,
+               embeddings=None) -> Dict[int, Dict]:
         """
         Update tracker with one-to-one assignment and spatial-gated ReID.
 
@@ -79,9 +90,26 @@ class PersonTracker:
                 assigned to a different physical person (e.g. verified unlocker IDs).
                 These IDs are still tracked normally when directly detected — protection
                 only blocks a *lost* protected ID from being matched to a new passer-by.
+            embeddings: Optional (N, D) array of L2-normalized appearance embeddings,
+                aligned to ``detections``. When present, lost-id Re-ID ranks candidates
+                by embedding cosine distance (cross-view, gap-robust) instead of
+                pose-keypoint distance. Falls back to keypoints when absent/zero.
         """
         if not detections:
             return {}
+
+        # Attach per-detection embedding (None when unavailable or a zero vector).
+        if embeddings is not None and len(embeddings) == len(detections):
+            for i, d in enumerate(detections):
+                emb = embeddings[i]
+                d["_embedding"] = (
+                    emb if (emb is not None and getattr(emb, "size", 0) > 0
+                            and float(np.linalg.norm(emb)) > 0.0)
+                    else None
+                )
+        else:
+            for d in detections:
+                d.setdefault("_embedding", None)
 
         det_bboxes = np.array([d["bbox"] for d in detections])
         confidences = np.array([d["confidence"] for d in detections])
@@ -146,6 +174,7 @@ class PersonTracker:
                 self.reid_history.pop(lost_id, None)
                 self.lost_id_frames.pop(lost_id, None)
                 self.last_known_bbox.pop(lost_id, None)
+                self.embedding_gallery.pop(lost_id, None)
                 continue
 
             # Skip Re-ID for protected IDs (verified + candidate unlockers): the
@@ -172,7 +201,14 @@ class PersonTracker:
             # Scale-invariant — works for near and far cameras.
             NORM_THRESH = 0.35
 
-            best_b_id, best_dist = None, NORM_THRESH
+            # Prefer deep appearance matching when this lost id has an embedding
+            # template; it re-links across angle/gap where keypoints cannot. Fall back
+            # to pose-keypoint distance otherwise.
+            lost_emb = self.embedding_gallery.get(lost_id) if self._reid_enabled else None
+            use_emb = lost_emb is not None
+            best_b_id = None
+            best_dist = self._reid_cos_max if use_emb else NORM_THRESH
+            match_kind = "cos" if use_emb else "norm"
 
             for b_id_int, (true_id, det) in det_by_b_id.items():
                 if true_id == lost_id:
@@ -194,16 +230,24 @@ class PersonTracker:
                         if np.sqrt((cx - last_center[0])**2 + (cy - last_center[1])**2) > spatial_limit:
                             continue
 
-                cand_h = self._bbox_height(det.get("bbox"))
-                ref_h = max(last_h, cand_h) if (last_h > 0 and cand_h > 0) else None
-                dist = self._compute_keypoint_distance(lost_template, det.get("keypoints"), ref_h)
-                if dist < best_dist:
-                    best_dist, best_b_id = dist, b_id_int
+                if use_emb:
+                    cand_emb = det.get("_embedding")
+                    if cand_emb is None:
+                        continue
+                    cos_dist = self._cos_dist(lost_emb, cand_emb)
+                    if cos_dist < best_dist:
+                        best_dist, best_b_id = cos_dist, b_id_int
+                else:
+                    cand_h = self._bbox_height(det.get("bbox"))
+                    ref_h = max(last_h, cand_h) if (last_h > 0 and cand_h > 0) else None
+                    dist = self._compute_keypoint_distance(lost_template, det.get("keypoints"), ref_h)
+                    if dist < best_dist:
+                        best_dist, best_b_id = dist, b_id_int
 
             if best_b_id is not None:
                 old_true_id = det_by_b_id[best_b_id][0]
                 print(f"[REID] RESTORE: {old_true_id} -> {lost_id} "
-                      f"(norm_dist={best_dist:.3f}, lost_frames={frames_lost})")
+                      f"({match_kind}_dist={best_dist:.3f}, lost_frames={frames_lost})")
                 self.aliases[best_b_id] = lost_id
                 det_by_b_id[best_b_id] = (lost_id, det_by_b_id[best_b_id][1])
                 self.lost_id_frames[lost_id] = 0
@@ -219,6 +263,17 @@ class PersonTracker:
             bbox = det.get("bbox")
             if bbox is not None:
                 self.last_known_bbox[true_id] = bbox
+
+            # Maintain the EMA appearance template for this track.
+            emb = det.get("_embedding")
+            if self._reid_enabled and emb is not None:
+                prev = self.embedding_gallery.get(true_id)
+                if prev is None:
+                    self.embedding_gallery[true_id] = emb.copy()
+                else:
+                    merged = self._reid_ema * prev + (1.0 - self._reid_ema) * emb
+                    n = float(np.linalg.norm(merged))
+                    self.embedding_gallery[true_id] = (merged / n) if n > 0 else emb.copy()
 
             curr_kpts = det.get("keypoints")
             if curr_kpts is not None:

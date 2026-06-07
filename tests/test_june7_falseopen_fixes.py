@@ -140,7 +140,10 @@ def _bare_sm():
     return sm
 
 
-def test_appearance_gate_blocks_same_person_id_switch():
+def test_appearance_gate_blocks_same_person_id_switch(monkeypatch):
+    # Gate ships DISABLED for same-uniform deployments; force it on to test the logic.
+    import config
+    monkeypatch.setattr(config, "APPEARANCE_GATE_ENABLED", True)
     sm = _bare_sm()
     red = _person((40, 40, 200), seed=1)
     sm.body_fingerprints["a"] = {"hsv": DualAuthStateMachine._appearance_signature(red, [0, 0, 40, 90])}
@@ -154,7 +157,9 @@ def test_appearance_gate_blocks_same_person_id_switch():
     assert sm.session["same_id_offender"] == 7      # Fix 3: offender id captured
 
 
-def test_appearance_gate_allows_distinct_second_person():
+def test_appearance_gate_allows_distinct_second_person(monkeypatch):
+    import config
+    monkeypatch.setattr(config, "APPEARANCE_GATE_ENABLED", True)
     sm = _bare_sm()
     red = _person((40, 40, 200), seed=1)
     blue = _person((200, 40, 40), seed=3)
