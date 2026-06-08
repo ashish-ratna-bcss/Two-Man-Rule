@@ -120,6 +120,11 @@ RTSP_JITTER_LATENCY_MS = 1000
 RTSP_DROP_ON_LATENCY = False
 RTSP_READ_TIMEOUT_SECONDS = 1.5
 RTSP_STARTUP_TIMEOUT_SECONDS = 10.0
+# Initial-connect retry: a transient first-open failure (camera/network down at dawn)
+# retries in-process with backoff instead of killing the worker (witnessed: ongole 22
+# crash-loop restarts on [Errno 110]). reconnect_delay (5s) × 12 ≈ 1 min of riding a blip;
+# a genuinely dead source still raises after the budget for the supervisor to handle.
+RTSP_INITIAL_OPEN_MAX_ATTEMPTS = 12
 RTSP_LOW_LATENCY = False
 PRESERVE_FILE_FRAMES = True       # Offline videos are read sequentially with no frame overwrite/drop.
 RTSP_PREFER_REALTIME = True       # Live RTSP keeps latest frame to avoid latency buildup.
@@ -154,6 +159,31 @@ FRAME_QUALITY_ENABLED = True
 FRAME_QUALITY_DEGRADED_AFTER_FRAMES = 15
 FRAME_QUALITY_RECOVERY_GOOD_FRAMES = 20
 FRAME_QUALITY_STALE_AFTER_FRAMES = 90
+
+# Localized-corruption (decode block) detection. Global white/black ratios miss a
+# blowout confined to one quadrant + macroblock smear (witnessed: vizag/rajahmundry/
+# marathahalli June-8 dawn false-opens, gate logged 0 freezes). A cell-grid catches a
+# saturated block in any single cell. Empirically separated on the real corrupt vs clean
+# captures: corrupt cell-white 0.92-1.0, flat-white frac 0.05-0.13; clean cell-white
+# <=0.21, flat-white 0.0. Thresholds biased toward the clean side for low false-positives.
+FRAME_QUALITY_CELL_GRID = (8, 6)            # (cols, rows) cells over the small frame
+FRAME_QUALITY_CELL_WHITE_RATIO = 0.85       # any cell >= this fraction saturated -> corrupt
+FRAME_QUALITY_FLAT_WHITE_FRACTION = 0.03    # frac of frame that is flat (decode) white -> corrupt
+
+# Adaptive recovery: a perpetually freeze-storming stream (witnessed: kompally 5080 freeze
+# / 65 recover) can never accumulate RECOVERY_GOOD_FRAMES consecutive clean frames, so it
+# stays frozen the whole window. After a long bad run, lower the bar to a floor so the
+# stream resumes real-time analysis. Each counted frame already passed every corruption
+# check, so a smaller count is still all-clean.
+FRAME_QUALITY_RECOVERY_GOOD_FRAMES_MIN = 8  # floor when storming
+FRAME_QUALITY_RECOVERY_STORM_BAD_FRAMES = 60  # bad-run length that triggers the lowered floor
+
+# Morning capture grace: the CLOSED->OPEN snapshot previously fired at the exact transition
+# instant, before unlocker IDs settled -> p1/p2 null even when openers were present
+# (witnessed: kakinada/himayatnagar/nizamabad June-8). After an unauthorized-looking
+# transition, hold this many real seconds of GOOD frames, re-checking auth, so the snapshot
+# reflects the settled state. Authorized + SAME_ID verdicts still fire immediately.
+MORNING_CAPTURE_GRACE_SECONDS = 2.0
 
 
 STREAMS_CONFIG = [
@@ -440,7 +470,12 @@ STREAMS_CONFIG = [
         "debounce_threshold": 5,
         "intensity_threshold": 10,
         "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.3,
+        # Full-door corner ROI (DOOR_CORNER_ROI == DOOR_ROI): camera shows only half the
+        # door so the whole door is the open/close patch. A 0.3 min-visible let a 30%
+        # unoccluded sliver drive the transition -> flip-prone. Raised to 0.45 so a real
+        # door-surface fraction must be visible to trust the reading; corruption false-opens
+        # are handled separately by the frame-quality cell-block gate.
+        "door_corner_min_visible_ratio": 0.45,
         "min_unlock_seconds": 1.0,
         "max_unlock_seconds": 10.0,
 
@@ -464,7 +499,9 @@ STREAMS_CONFIG = [
         "debounce_threshold": 7,
         "intensity_threshold": 12,
         "motion_threshold": 5.0,
-        "door_corner_min_visible_ratio": 0.3,
+        # Full-door corner ROI (see vijayawada note): raised 0.3 -> 0.45 to stop a partial
+        # sliver flipping the transition. Corruption false-opens handled by the cell-block gate.
+        "door_corner_min_visible_ratio": 0.45,
         # NOTE: min_unlock_seconds was 0.2 (200ms) — almost certainly a calibration
         # accident.  At process_every=3 and 15fps that is ~3 frames: one inference
         # cycle.  The camera had 160 inference timeouts and zero authorized captures
@@ -764,55 +801,55 @@ STREAMS_CONFIG = [
             "LOCKS_ROI": np.array([(3008.153477218224, 4.796163069544362), (3173.908872901677, 603.3573141486808), (2553.860911270982, 511.270983213429), (2360.4796163069536, 4.796163069544362)], np.int32),
             "DOOR_ROI": np.array([(3056.038388039567, 1.7266187050359705), (3258.356516768292, 878.4990619136959), (2549.5635678956824, 750.6954436450836), (2340.8345511091115, 1.7266187050359705)], np.int32)
         }
-    }
+    },
     # Tamil Nadu streams Below
 
     # Stream 21 - Coimbatore
-    # {
-    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.251.16:8001/Streaming/Channels/2701",
-    #     "camera_id": "GF-40-CAM-27",
-    #     "site_id": "40",
-    #     "site_name": "coimbatore-store",
-    #     "closed_door_reference": "close_doors/closed_GF-40-CAM-27.jpg",
-    #     "ssim_threshold": 0.80,
-    #     "debounce_threshold": 15,
-    #     "intensity_threshold": 6,
-    #     "motion_threshold": 3.0,
-    #     "door_corner_min_visible_ratio": 0.5,
-    #     "min_unlock_seconds": 5.0,
-    #     "max_unlock_seconds": 10.0,
-    #     "evening_second_unlocker_timeout_seconds": 300.0,
-    #     "rois": {
-    #         "DOOR_CORNER_ROI": np.array([[558, 1], [543, 62], [769, 1]], np.int32),
-    #         "STANDING_ZONE": np.array([[442, 550], [417, 743], [876, 727], [847, 541]], np.int32),
-    #         "LOCKS_ROI": np.array([[507, 106], [440, 527], [847, 527], [973, 131]], np.int32),
-    #         "DOOR_ROI": np.array([[525, 3], [427, 662], [835, 653], [1070, 10]], np.int32),
-    #         "INTERACTION_ZONE": np.array([[11, 19], [1899, 22], [1899, 1055], [20, 1060]], np.int32)
-    #     }
-    # },
-    # # Stream 22 - Chennai Annanagar
-    # {
-    #     "rtsp_url": "rtsp://Bluecloud:User%401964@49.207.187.203:8001/Streaming/Channels/1501",
-    #     "camera_id": "GF-41-CAM-15",
-    #     "site_id": "41",
-    #     "site_name": "chennai-annanagar-store",
-    #     "closed_door_reference": "close_doors/closed_GF-41-CAM-15.jpg",
-    #     "ssim_threshold": 0.80,
-    #     "debounce_threshold": 15,
-    #     "intensity_threshold": 6,
-    #     "motion_threshold": 3.0,
-    #     "door_corner_min_visible_ratio": 0.5,
-    #     "min_unlock_seconds": 5.0,
-    #     "max_unlock_seconds": 10.0,
-    #     "evening_second_unlocker_timeout_seconds": 300.0,
-    #     "rois": {
-    #         "STANDING_ZONE": np.array([[2421, 1310], [2071, 1614], [2785, 2129], [3066, 1779]], np.int32),
-    #         "INTERACTION_ZONE": np.array([[50, 57], [3798, 34], [3798, 2102], [50, 2111]], np.int32),
-    #         "LOCKS_ROI": np.array([[3508, 845], [2477, 389], [2283, 1268], [3149, 1733]], np.int32),
-    #         "DOOR_ROI": np.array([[3651, 389], [3061, 1867], [2223, 1402], [2527, 7]], np.int32),
-    #         "DOOR_CORNER_ROI": np.array([[2899, 111], [2879, 203], [3192, 182]], np.int32)
-    #     }
-    # }
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.251.16:8001/Streaming/Channels/2701",
+        "camera_id": "GF-40-CAM-27",
+        "site_id": "40",
+        "site_name": "coimbatore-store",
+        "closed_door_reference": "close_doors/closed_GF-40-CAM-27.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "DOOR_CORNER_ROI": np.array([[558, 1], [543, 62], [769, 1]], np.int32),
+            "STANDING_ZONE": np.array([[442, 550], [417, 743], [876, 727], [847, 541]], np.int32),
+            "LOCKS_ROI": np.array([[507, 106], [440, 527], [847, 527], [973, 131]], np.int32),
+            "DOOR_ROI": np.array([[525, 3], [427, 662], [835, 653], [1070, 10]], np.int32),
+            "INTERACTION_ZONE": np.array([[11, 19], [1899, 22], [1899, 1055], [20, 1060]], np.int32)
+        }
+    },
+    # Stream 22 - Chennai Annanagar
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@49.207.187.203:8001/Streaming/Channels/1501",
+        "camera_id": "GF-41-CAM-15",
+        "site_id": "41",
+        "site_name": "chennai-annanagar-store",
+        "closed_door_reference": "close_doors/closed_GF-41-CAM-15.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([[2421, 1310], [2071, 1614], [2785, 2129], [3066, 1779]], np.int32),
+            "INTERACTION_ZONE": np.array([[50, 57], [3798, 34], [3798, 2102], [50, 2111]], np.int32),
+            "LOCKS_ROI": np.array([[3508, 845], [2477, 389], [2283, 1268], [3149, 1733]], np.int32),
+            "DOOR_ROI": np.array([[3651, 389], [3061, 1867], [2223, 1402], [2527, 7]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2899, 111], [2879, 203], [3192, 182]], np.int32)
+        }
+    }
 ]
 
 BASE_OUTPUT_DIR = "strong_room_opening"

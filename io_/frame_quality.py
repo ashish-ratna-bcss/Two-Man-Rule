@@ -61,6 +61,16 @@ class FrameQualityGate:
         )
         self.door_corner_roi = door_corner_roi.reshape(-1, 2).astype(np.int32) if door_corner_roi is not None else None
 
+        self.recovery_good_frames_min = int(
+            getattr(config, "FRAME_QUALITY_RECOVERY_GOOD_FRAMES_MIN", self.recovery_good_frames)
+        )
+        self.recovery_storm_bad_frames = int(
+            getattr(config, "FRAME_QUALITY_RECOVERY_STORM_BAD_FRAMES", 60)
+        )
+        self._cell_grid = tuple(getattr(config, "FRAME_QUALITY_CELL_GRID", (8, 6)))
+        self._cell_white_ratio = float(getattr(config, "FRAME_QUALITY_CELL_WHITE_RATIO", 0.85))
+        self._flat_white_fraction = float(getattr(config, "FRAME_QUALITY_FLAT_WHITE_FRACTION", 0.03))
+
         self._last_gray_small = None
         self._last_good_gray_small = None
         self._stale_frames = 0
@@ -76,9 +86,15 @@ class FrameQualityGate:
 
         if status == FrameQualityStatus.GOOD:
             self._consecutive_good += 1
-            if self._recovering and self._consecutive_good < self.recovery_good_frames:
+            # Adaptive recovery: a long freeze storm (large _consecutive_bad, which is held
+            # through recovery until it completes) can never reach the full count, so lower
+            # the bar to the floor. Each counted frame already passed every corruption check.
+            effective_recovery = self.recovery_good_frames
+            if self._consecutive_bad >= self.recovery_storm_bad_frames:
+                effective_recovery = self.recovery_good_frames_min
+            if self._recovering and self._consecutive_good < effective_recovery:
                 usable = False
-                reason = f"recovering_good_frames_{self._consecutive_good}_of_{self.recovery_good_frames}"
+                reason = f"recovering_good_frames_{self._consecutive_good}_of_{effective_recovery}"
             else:
                 usable = True
                 self._recovering = False
@@ -170,6 +186,9 @@ class FrameQualityGate:
         left_mean = float(np.mean(left))
         right_mean = float(np.mean(right))
 
+        cell_white_max = self._cell_white_max(gray_patch)
+        flat_white_frac = self._flat_white_frac(gray_patch)
+
         return {
             f"{prefix}_white_ratio": white_ratio,
             f"{prefix}_black_ratio": black_ratio,
@@ -178,7 +197,34 @@ class FrameQualityGate:
             f"{prefix}_half_mean_delta": abs(left_mean - right_mean),
             f"{prefix}_max_half_mean": max(left_mean, right_mean),
             f"{prefix}_min_half_mean": min(left_mean, right_mean),
+            f"{prefix}_cell_white_max": cell_white_max,
+            f"{prefix}_flat_white_frac": flat_white_frac,
         }
+
+    def _cell_white_max(self, gray_patch: np.ndarray) -> float:
+        """Max saturated-white ratio over an NxM cell grid (localized decode blowout)."""
+        h, w = gray_patch.shape[:2]
+        cols, rows = self._cell_grid
+        ch, cw = max(1, h // rows), max(1, w // cols)
+        best = 0.0
+        for i in range(rows):
+            for j in range(cols):
+                cell = gray_patch[i * ch:(i + 1) * ch, j * cw:(j + 1) * cw]
+                if cell.size == 0:
+                    continue
+                r = float(np.mean(cell >= 245))
+                if r > best:
+                    best = r
+        return best
+
+    @staticmethod
+    def _flat_white_frac(gray_patch: np.ndarray) -> float:
+        """Fraction of the patch that is saturated (>=250) AND flat (near-zero local
+        variance) — the signature of a decode block, not a textured highlight."""
+        g = gray_patch.astype(np.float32)
+        blur = cv2.blur(g, (3, 3))
+        local_var = cv2.blur((g - blur) ** 2, (3, 3))
+        return float(np.mean((gray_patch >= 250) & (local_var < 5.0)))
 
     def _artifact_reason(self, metrics: Dict[str, float], prefix: str) -> Optional[str]:
         half_delta = metrics.get(f"{prefix}_half_mean_delta", 0.0)
@@ -193,6 +239,12 @@ class FrameQualityGate:
             return f"{prefix}_half_frame_brightness_split"
         if white_ratio >= 0.65:
             return f"{prefix}_large_white_block"
+        # Localized decode blowout: a single grid cell fully saturated, or a flat
+        # (zero-texture) saturated region — both stay under the global white_ratio.
+        if metrics.get(f"{prefix}_cell_white_max", 0.0) >= self._cell_white_ratio:
+            return f"{prefix}_cell_white_block"
+        if metrics.get(f"{prefix}_flat_white_frac", 0.0) >= self._flat_white_fraction:
+            return f"{prefix}_flat_white_block"
         if black_ratio >= 0.85:
             return f"{prefix}_large_black_block"
         if sat_ratio >= 0.45 and sat_std >= 45.0:

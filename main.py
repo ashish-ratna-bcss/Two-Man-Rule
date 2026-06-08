@@ -428,7 +428,7 @@ def _seconds_until_next_window(skip_active: bool = False) -> float:
     curr_min = now.hour * 60 + now.minute
 
     morning_start_min = 7 * 60    # 07:00
-    morning_end_min   = 11 * 60   # 11:00
+    morning_end_min   = 12 * 60   # 12:00 (extended from 11:00: late openings ~11:15 were missed)
     evening_start_min = 19 * 60   # 19:00
     evening_end_min   = 23 * 60   # 23:00
 
@@ -447,7 +447,7 @@ def _seconds_until_next_window(skip_active: bool = False) -> float:
     # Before morning window → sleep until 07:00 today
     elif curr_min < morning_start_min:
         target = now.replace(hour=7, minute=0, second=0, microsecond=0)
-    # Between windows (11:01 – 18:59) → sleep until 19:00 today
+    # Between windows (12:01 – 18:59) → sleep until 19:00 today
     elif curr_min < evening_start_min:
         target = now.replace(hour=19, minute=0, second=0, microsecond=0)
     # After evening window (23:01+) → sleep until 07:00 tomorrow
@@ -830,10 +830,10 @@ def main(
             morning_check_done = (test_window == "evening")
             evening_check_done = (test_window == "morning")
         else:
-            morning_check_done = curr_hm > "11:00"
+            morning_check_done = curr_hm > "12:00"
             evening_check_done = curr_hm > "23:58"
             if morning_check_done:
-                print(f"[SYSTEM] Startup after 11:00 AM IST. Morning check for {last_reset_date} marked as SKIPPED.")
+                print(f"[SYSTEM] Startup after 12:00 PM IST. Morning check for {last_reset_date} marked as SKIPPED.")
             if evening_check_done:
                 print(f"[SYSTEM] Startup after 11:58 PM IST. Evening check for {last_reset_date} marked as SKIPPED.")
 
@@ -850,20 +850,16 @@ def main(
         active_auth_window           = None
         auth_success_logged_by_window = {"morning": False, "evening": False}
         evening_auth_started         = False
-        # Frame cached at the OPEN->CLOSE instant (witness of who closed the door).
-        # Used as the evidence image for the unauthorized/timeout capture so it shows
-        # the closing moment with people present, never an empty late live frame.
-        evening_closing_frame        = None
         # Wall-clock time of the OPEN->CLOSE instant. The second-unlocker timeout is
         # measured in REAL seconds from this, not frame-time, so quality-freezes (which
         # stop frame_idx advancing) cannot stretch the timeout past the window end.
+        # No frame is cached: all captures use the live (quality-gated GOOD) frame at
+        # decision time — real-time evidence only, never a stored/stale image.
         evening_closing_time         = None
-        # Fix 4: whether the cached closing frame actually contained people, plus the
-        # most recent frame that had >=1 detection. If the door OPEN->CLOSE instant was
-        # spurious (empty scene), the timeout/window-end witness falls back to the last
-        # frame with people instead of saving an empty image.
-        evening_closing_had_persons  = False
-        last_frame_with_persons      = None
+        # Morning grace: wall-clock deadline after a CLOSED->OPEN that looked unauthorized.
+        # While set, the loop keeps processing GOOD frames and re-checking auth before
+        # snapshotting, so unlocker IDs can settle (no p1/p2-null race at the bare instant).
+        morning_grace_deadline       = None
         last_door_state              = None
         is_door_open                 = False
         ssim_val                     = None
@@ -940,7 +936,7 @@ def main(
                 is_morning_window = (test_window == "morning")
                 is_evening_window = (test_window == "evening")
             else:
-                is_morning_window = "07:00" <= curr_hour_min <= "11:00"
+                is_morning_window = "07:00" <= curr_hour_min <= "12:00"
                 is_evening_window = "19:00" <= curr_hour_min <= "23:00"
 
             current_auth_window = None
@@ -971,18 +967,14 @@ def main(
                         # there the window never "leaves" (forced flags).
                         if not auth_check_complete and not test_window and not debug and not show_all_detections:
                             # If evening was ARMED (door did OPEN->CLOSE) but no verdict
-                            # was reached before the window ended, emit the timeout
-                            # capture now using the cached closing-moment frame — so any
+                            # was reached before the window ended, emit the unauthorized
+                            # capture now on the live (quality-gated GOOD) frame — so any
                             # stream whose door closed always leaves a witness snapshot
-                            # instead of exiting silently. Streams whose door never
-                            # transitioned (never armed) still exit silently.
-                            if (active_auth_window == "evening" and evening_auth_started
-                                    and evening_closing_frame is not None):
-                                window_end_witness = evening_closing_frame
-                                if not evening_closing_had_persons and last_frame_with_persons is not None:
-                                    window_end_witness = last_frame_with_persons
+                            # instead of exiting silently. Real-time frame only, never a
+                            # stored/stale image. Streams that never armed exit silently.
+                            if active_auth_window == "evening" and evening_auth_started:
                                 capture(
-                                    alert_system, window_end_witness,
+                                    alert_system, clean_frame,
                                     "DOOR_CLOSE_UNAUTHORIZED_PRESENCE",
                                     evidence_dir=evidence_dir, cam_id=cam_id,
                                     site_name=site_name,
@@ -1322,11 +1314,6 @@ def main(
                             detections, protected_ids=_verified_ids, embeddings=reid_embeddings
                         )
 
-                        # Fix 4: remember the latest frame that actually had people, for
-                        # use as a witness fallback when a closing frame is empty.
-                        if tracked_persons:
-                            last_frame_with_persons = clean_frame.copy()
-
                         auth_active = (
                             current_auth_window == "morning"
                             # Evening: detection is GATED on the OPEN->CLOSE transition.
@@ -1635,11 +1622,19 @@ def main(
 
             # ===== MORNING CHECK =====
             if is_morning_window and not morning_check_done:
-                if door_transition == "CLOSED_TO_OPEN":
+                # A new CLOSED->OPEN, or grace already running, both drive the verdict.
+                _morning_open_event = (
+                    door_transition == "CLOSED_TO_OPEN" and morning_grace_deadline is None
+                ) or (morning_grace_deadline is not None)
+                if _morning_open_event:
                     is_auth = auth_result["authorized"]
                     both_in_interaction = state_machine.verified_unlockers_in_interaction_zone(tracked_persons)
+                    same_id_now = "SAME_ID" in state_machine.session.get("captured_violations", [])
+                    grace_expired = (
+                        morning_grace_deadline is not None and now_ist >= morning_grace_deadline
+                    )
 
-                    if "SAME_ID" in state_machine.session.get("captured_violations", []):
+                    if same_id_now:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
@@ -1651,6 +1646,12 @@ def main(
                             "reason": "same_person_tried_both_slots",
                         }, "Morning")
                         print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST (SAME_ID).")
+                        state_machine.session["door_open_captured"] = True
+                        morning_grace_deadline = None
+                        morning_check_done = True
+                        stream_priority_active = False
+                        auth_check_complete = True
+                        break
                     elif is_auth and both_in_interaction:
                         persons_auth_status = True
                         _capture("DOOR_OPEN_AUTHORIZED_PRESENCE", {
@@ -1662,10 +1663,34 @@ def main(
                         }, "Morning")
                         print(f"[MORNING] Authorized CLOSED->OPEN confirmed at {curr_hour_min} IST.")
                         state_machine.session["door_open_captured"] = True
+                        morning_grace_deadline = None
                         morning_check_done = True
                         stream_priority_active = False
                         auth_check_complete = True
                         break
+                    elif morning_grace_deadline is None:
+                        # First unauthorized-looking instant — start the grace and WAIT for
+                        # unlocker IDs to settle before snapshotting (no bare-instant null).
+                        morning_grace_deadline = now_ist + timedelta(
+                            seconds=config.MORNING_CAPTURE_GRACE_SECONDS
+                        )
+                        print(f"[MORNING] CLOSED->OPEN at {curr_hour_min} IST — "
+                              f"grace {config.MORNING_CAPTURE_GRACE_SECONDS:.1f}s for unlocker IDs.")
+                        visualizer.draw_status_text(
+                            frame, "MORNING CHECK: CONFIRMING UNLOCKERS...",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
+                    elif not is_door_open:
+                        # Door fell back to CLOSED during grace — the open was not sustained
+                        # (spurious/flicker). Abort: no capture, wait for a real transition.
+                        morning_grace_deadline = None
+                        print(f"[MORNING] Open not sustained during grace at {curr_hour_min} IST — aborting capture.")
+                    elif not grace_expired:
+                        # Still within grace, still unauthorized — keep waiting on GOOD frames.
+                        visualizer.draw_status_text(
+                            frame, "MORNING CHECK: CONFIRMING UNLOCKERS...",
+                            (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
+                        )
                     else:
                         persons_auth_status = False
                         _capture("DOOR_OPEN_UNAUTHORIZED_PRESENCE", {
@@ -1677,12 +1702,12 @@ def main(
                             "reason": "missing_dual_auth_or_interaction_zone",
                         }, "Morning")
                         print(f"[MORNING] UNAUTHORIZED CLOSED->OPEN at {curr_hour_min} IST.")
-
-                    state_machine.session["door_open_captured"] = True
-                    morning_check_done = True
-                    stream_priority_active = False
-                    auth_check_complete = True
-                    break
+                        state_machine.session["door_open_captured"] = True
+                        morning_grace_deadline = None
+                        morning_check_done = True
+                        stream_priority_active = False
+                        auth_check_complete = True
+                        break
 
                 elif not morning_check_done:
                     # Idle display while waiting for door transition
@@ -1711,11 +1736,6 @@ def main(
                     state_machine.reset_session()
                     evening_auth_started = True
                     state_machine.session["door_closing_start_frame"] = frame_idx
-                    # Cache the closing-moment frame as witness evidence for the
-                    # unauthorized/timeout capture (so it shows who closed the door,
-                    # never an empty late frame).
-                    evening_closing_frame = clean_frame.copy()
-                    evening_closing_had_persons = bool(tracked_persons)
                     evening_closing_time = now_ist
                     print(f"[EVENING] Door OPEN->CLOSE detected at {curr_hour_min} IST. Starting unlocker check.")
 
@@ -1750,20 +1770,15 @@ def main(
                         break
                     elif elapsed_seconds >= stream_evening_second_unlocker_timeout:
                         persons_auth_status = False
-                        # Use the cached door-closing frame as witness evidence (who
-                        # closed the door), not the empty live frame minutes later. If
-                        # that closing frame was empty (spurious transition), fall back
-                        # to the last frame that actually had people (Fix 4).
-                        timeout_witness = evening_closing_frame
-                        if not evening_closing_had_persons and last_frame_with_persons is not None:
-                            timeout_witness = last_frame_with_persons
+                        # Capture on the live (quality-gated GOOD) frame at the timeout
+                        # instant — real-time evidence only, never a stored/stale image.
                         _capture("DOOR_CLOSE_UNAUTHORIZED_PRESENCE", {
                             "authorized": False,
                             "p1_id":      state_machine.session.get("id_a"),
                             "p2_id":      state_machine.session.get("id_b"),
                             "wait_time":  f"{elapsed_seconds:.1f}s Timeout",
                             "reason":     "second_unlocker_timeout",
-                        }, "Evening", frame_override=timeout_witness)
+                        }, "Evening")
                         print(f"[EVENING] UNAUTHORIZED closure (timeout) at {curr_hour_min} IST.")
                         evening_check_done   = True
                         evening_auth_started = False

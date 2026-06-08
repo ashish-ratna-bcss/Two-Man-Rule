@@ -206,7 +206,7 @@ class VideoHandler:
         )
         self._next_file_frame_time: Optional[float] = None
 
-        self.cap = self._open()
+        self.cap = self._open_with_retry()
 
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or config.DEFAULT_FPS
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -234,6 +234,51 @@ class VideoHandler:
                 startup_timeout_seconds=float(getattr(config, "RTSP_STARTUP_TIMEOUT_SECONDS", 10.0)),
             )
         return _OpenCVCapture(self.video_source)
+
+    def _open_with_retry(self):
+        """Open the source, retrying transient RTSP connect failures with backoff.
+
+        A first-connect timeout (e.g. camera/network down at dawn — witnessed: ongole
+        `[Errno 110] Connection timed out`) previously raised straight out of __init__,
+        killing the worker so a supervisor churned it through dozens of restarts. Retry
+        in-process for a bounded number of attempts so a brief blip rides through; a
+        genuinely dead source still raises after the budget so the supervisor can act.
+        Non-RTSP (file) sources are not retried.
+        """
+        if not self._is_rtsp:
+            return self._open()
+
+        max_attempts = int(getattr(config, "RTSP_INITIAL_OPEN_MAX_ATTEMPTS", 12))
+        attempt = 0
+        last_err = None
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                return self._open()
+            except Exception as e:
+                # Permanent misconfiguration (missing library, unsupported backend) will
+                # never succeed on retry — fail fast. Only transient connect failures
+                # (timeouts, refused, network down) are worth backing off and retrying.
+                if self._is_permanent_open_error(e):
+                    raise
+                last_err = e
+                print(
+                    f"[VIDEO] Initial RTSP open failed (attempt {attempt}/{max_attempts}): {e}. "
+                    f"Retrying in {self.reconnect_delay}s..."
+                )
+                time.sleep(self.reconnect_delay)
+        raise RuntimeError(
+            f"RTSP open failed after {max_attempts} attempts: {last_err}"
+        )
+
+    @staticmethod
+    def _is_permanent_open_error(err: Exception) -> bool:
+        msg = str(err).lower()
+        return (
+            "requires pyav" in msg
+            or "unsupported rtsp_ingest_backend" in msg
+            or "no video stream" in msg
+        )
 
     def _reconnect_rtsp(self) -> Tuple[bool, Optional[np.ndarray], Optional[datetime]]:
         self.reconnect_count += 1

@@ -79,6 +79,57 @@ def test_realistic_small_brightness_change_stays_good():
     assert result_b.usable is True
 
 
+def test_localized_quadrant_white_block_is_corrupt():
+    # One quadrant fully saturated (decode blowout) — global white_ratio ~0.25 stays
+    # under the old 0.65 global gate, but a full cell is saturated -> cell detector fires.
+    gate = FrameQualityGate(enabled=True, recovery_good_frames=2)
+    gate.evaluate(_normal_frame())
+    frame = _normal_frame()
+    frame[:60, :80] = 255  # top-left quadrant pure white (~25% of frame)
+
+    result = gate.evaluate(frame)
+
+    assert result.status == FrameQualityStatus.CORRUPT
+    assert result.usable is False
+    assert "white_block" in result.reason
+
+
+def test_bright_textured_scene_not_flagged_white_block():
+    # A bright-but-textured frame (no flat saturated block) must stay GOOD — guards the
+    # cell detector against false positives on legitimately bright scenes.
+    gate = FrameQualityGate(enabled=True, recovery_good_frames=2)
+    gate.evaluate(_normal_frame())
+    rng = np.random.default_rng(0)
+    frame = np.clip(rng.integers(170, 235, size=(120, 160, 3)), 0, 255).astype(np.uint8)
+
+    result = gate.evaluate(frame)
+
+    assert result.status == FrameQualityStatus.GOOD
+
+
+def test_adaptive_recovery_lowers_bar_after_storm():
+    # A long freeze storm must not demand the full recovery count forever — after a storm
+    # the required consecutive good frames drops to the floor so the stream resumes.
+    gate = FrameQualityGate(
+        enabled=True, recovery_good_frames=20, stale_after_frames=10_000
+    )
+    import config
+    floor = config.FRAME_QUALITY_RECOVERY_GOOD_FRAMES_MIN
+    storm = config.FRAME_QUALITY_RECOVERY_STORM_BAD_FRAMES
+    corrupt = _normal_frame()
+    corrupt[:60, :80] = 255
+
+    for _ in range(storm + 5):
+        gate.evaluate(corrupt.copy())
+
+    # Feed exactly `floor` good frames; the last must become usable (bar lowered to floor).
+    res = None
+    for i in range(floor):
+        res = gate.evaluate(_normal_frame(90 + i))
+    assert res.status == FrameQualityStatus.GOOD
+    assert res.usable is True
+
+
 def test_recovery_requires_configured_good_frames():
     gate = FrameQualityGate(enabled=True, stale_after_frames=10, recovery_good_frames=2)
     gate.evaluate(_normal_frame())
