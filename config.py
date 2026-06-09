@@ -388,7 +388,14 @@ STREAMS_CONFIG = [
         "site_id": "12",
         "site_name": "kokapet",
         "closed_door_reference": "close_doors/closed_GF-12-CAM-15.jpg",
-        "ssim_threshold": 0.811,
+        # PROVISIONAL 2026-06-10: measured evening closed-door SSIM = 0.62 (ref image
+        # is bright mean~80, evening is dark mean~45 → reference lighting mismatch), yet
+        # old threshold 0.811 sat ABOVE it → closed door leaned OPEN (false-open risk).
+        # Lowered below the evening closed band (active ~0.52 after twilight relax →
+        # closed margin +0.10). Single-frame estimate; confirm/refine from VIDEO_FRAME
+        # logs. Better long-term fix: an evening-lit closed_door_reference.
+        "ssim_threshold": 0.55,
+        "door_open_hysteresis": 0.06,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -811,7 +818,12 @@ STREAMS_CONFIG = [
         "site_id": "40",
         "site_name": "coimbatore-store",
         "closed_door_reference": "close_doors/closed_GF-40-CAM-27.jpg",
+        # PROVISIONAL 2026-06-10: measured evening closed-door SSIM = 0.93 vs threshold
+        # 0.80 → healthy +0.13 margin, door state correct (no false-open). Threshold
+        # kept; added open_hysteresis as an extra bias-toward-CLOSED guard. Confirm from
+        # VIDEO_FRAME logs.
         "ssim_threshold": 0.80,
+        "door_open_hysteresis": 0.06,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
