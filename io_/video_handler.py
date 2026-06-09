@@ -98,6 +98,27 @@ class _PyAVRTSPCapture:
         self._width = self._video_stream.width or 0
         self._height = self._video_stream.height or 0
 
+        # ── Per-stream bandwidth accounting (logging only; no behavior change) ──
+        # Bytes are summed from demuxed packets in _decode_loop (the actual data
+        # pulled off the socket = consumed). "required" is the encoder-declared
+        # nominal bitrate; frequently absent in RTSP SDP, in which case it is
+        # reported as null rather than guessed.
+        self._bytes_lock = threading.Lock()
+        self._bytes_total = 0
+        self._bw_start_time = time.time()
+        self._bw_last_time = self._bw_start_time
+        self._bw_last_total = 0
+        try:
+            self._required_bps = int(self._video_stream.bit_rate or 0) or int(
+                getattr(self._container, "bit_rate", 0) or 0
+            )
+        except Exception:
+            self._required_bps = 0
+        try:
+            self._codec_name = self._video_stream.codec_context.name
+        except Exception:
+            self._codec_name = "unknown"
+
         self._queue: queue.Queue = queue.Queue(maxsize=1)
         self._thread = threading.Thread(target=self._decode_loop, daemon=True)
         self._thread.start()
@@ -106,19 +127,28 @@ class _PyAVRTSPCapture:
 
     def _decode_loop(self):
         try:
-            for frame in self._container.decode(self._video_stream):
+            # demux→decode is behavior-identical to container.decode(stream): same
+            # frames, same order, discardcorrupt still applied at the container
+            # layer. The split lets us count packet.size (bytes actually pulled off
+            # the socket) for bandwidth logging without altering decode output.
+            for packet in self._container.demux(self._video_stream):
                 if not self._running:
                     return
-                if self._width == 0:
-                    self._width = frame.width
-                    self._height = frame.height
-                bgr = frame.to_ndarray(format="bgr24")
-                if self._queue.full():
-                    try:
-                        self._queue.get_nowait()
-                    except queue.Empty:
-                        pass
-                self._queue.put(bgr)
+                with self._bytes_lock:
+                    self._bytes_total += int(packet.size or 0)
+                for frame in packet.decode():
+                    if not self._running:
+                        return
+                    if self._width == 0:
+                        self._width = frame.width
+                        self._height = frame.height
+                    bgr = frame.to_ndarray(format="bgr24")
+                    if self._queue.full():
+                        try:
+                            self._queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    self._queue.put(bgr)
         except Exception as e:
             if self._running:
                 self._error = str(e)
@@ -152,6 +182,46 @@ class _PyAVRTSPCapture:
             return True, frame
         except queue.Empty:
             return True, None  # no sample yet — caller handles as transient timeout
+
+    def bandwidth_snapshot(self):
+        """Bandwidth stats for this stream since the last call (logging only).
+
+        consumed_mbps = data pulled off the socket during the interval just ended;
+        avg_mbps      = cumulative average since stream open;
+        required_mbps = encoder-declared nominal bitrate (None if not advertised);
+        ratio         = consumed / required (None if required unknown) — a ratio
+                        well below 1.0 means the network could not deliver the
+                        full stream, i.e. bandwidth starvation.
+        Must be called from a single consumer (it advances the interval marks).
+        """
+        now = time.time()
+        with self._bytes_lock:
+            total = self._bytes_total
+        elapsed_total = max(1e-6, now - self._bw_start_time)
+        delta_bytes = total - self._bw_last_total
+        delta_time = max(1e-6, now - self._bw_last_time)
+        self._bw_last_total = total
+        self._bw_last_time = now
+
+        consumed_bps = delta_bytes * 8.0 / delta_time
+        required_mbps = round(self._required_bps / 1e6, 3) if self._required_bps else None
+        ratio = (
+            round(consumed_bps / self._required_bps, 2)
+            if self._required_bps
+            else None
+        )
+        return {
+            "consumed_mbps": round(consumed_bps / 1e6, 3),
+            "avg_mbps": round(total * 8.0 / elapsed_total / 1e6, 3),
+            "interval_s": round(delta_time, 1),
+            "bytes_interval": int(delta_bytes),
+            "bytes_total": int(total),
+            "required_mbps": required_mbps,
+            "ratio": ratio,
+            "resolution": f"{self._width}x{self._height}",
+            "fps": round(float(self._fps), 1),
+            "codec": self._codec_name,
+        }
 
     def get(self, prop_id):
         if prop_id == cv2.CAP_PROP_FPS:
@@ -353,6 +423,16 @@ class VideoHandler:
                 self._latest_frame_ist = grab_ist
                 self.ret = True
             self._new_frame_event.set()
+
+    def bandwidth_snapshot(self):
+        """Per-stream bandwidth stats, or None for non-RTSP/unsupported sources."""
+        fn = getattr(self.cap, "bandwidth_snapshot", None)
+        if fn is None:
+            return None
+        try:
+            return fn()
+        except Exception:
+            return None
 
     def read_frame(
         self,

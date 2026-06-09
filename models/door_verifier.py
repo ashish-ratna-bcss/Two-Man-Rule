@@ -339,3 +339,48 @@ class DoorVerifier:
 
     def is_transition_pending(self) -> bool:
         return self.candidate_state != self.stable_is_open
+
+    def measure(self, frame: np.ndarray) -> Optional[Dict[str, float]]:
+        """Read-only door-corner-ROI metrics for THIS frame, for per-frame logging
+        and per-stream threshold calibration. Does NOT touch the debounce/candidate
+        FSM — pure measurement, safe to call every frame with zero behavior change.
+
+        SSIM mirrors verify()'s decision path (brightness-normalized composite +
+        twilight-relaxed effective threshold) so logged values map directly onto the
+        config knobs: similarity_threshold / ssim_threshold, darkening relax, motion.
+        """
+        try:
+            curr_crop = frame[self.ry:self.ry + self.rh, self.rx:self.rx + self.rw]
+            curr_patch = cv2.resize(cv2.cvtColor(curr_crop, cv2.COLOR_BGR2GRAY), self.ssim_size)
+            ref_patch = self.reference_patch
+            ref_mean = float(np.mean(ref_patch))
+            curr_mean = float(np.mean(curr_patch))
+            mean_diff = float(np.mean(cv2.absdiff(curr_patch, ref_patch)))
+
+            # Same brightness normalization verify() applies before SSIM.
+            mean_offset = ref_mean - curr_mean
+            adjusted = np.clip(curr_patch.astype(np.int16) + mean_offset, 0, 255).astype(np.uint8)
+            ssim_val = float(ssim(ref_patch, adjusted, full=False, data_range=255))
+            ssim_val = max(0.0, min(1.0, ssim_val))
+            grad_ssim = self._gradient_ssim(ref_patch, adjusted)
+
+            active_threshold = self.similarity_threshold
+            if self.darkening_protection:
+                active_threshold = self.similarity_threshold * self._lighting_relax_factor(curr_mean)
+
+            return {
+                "ssim":             round(ssim_val, 4),
+                "grad_ssim":        round(grad_ssim, 4),
+                "base_threshold":   round(float(self.similarity_threshold), 4),
+                "active_threshold": round(float(active_threshold), 4),
+                "open_hysteresis":  round(float(self.open_hysteresis), 4),
+                "intensity":        round(curr_mean, 2),
+                "ref_intensity":    round(ref_mean, 2),
+                "intensity_diff":   round(abs(curr_mean - ref_mean), 2),
+                "mean_diff":        round(mean_diff, 2),
+                "motion_threshold": round(float(self.motion_threshold), 2),
+                "stable_open":      bool(self.stable_is_open),
+            }
+        except Exception as e:
+            print(f"[DoorVerifier] measure error: {e}")
+            return None

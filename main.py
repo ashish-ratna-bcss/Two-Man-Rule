@@ -895,8 +895,31 @@ def main(
             else 2.0
         )
 
+        # Per-stream bandwidth logging cadence (logging only). Emitted on a wall
+        # clock at the loop top so it reports even while frames are frozen — that
+        # is precisely when consumed-vs-required exposes network starvation.
+        bw_log_interval = float(getattr(config, "STREAM_BANDWIDTH_LOG_INTERVAL_S", 30.0))
+        bw_next_log     = time.time() + bw_log_interval
 
         while True:
+            if time.time() >= bw_next_log:
+                bw_next_log = time.time() + bw_log_interval
+                _bw = video.bandwidth_snapshot()
+                if _bw is not None:
+                    _req = _bw.get("required_mbps")
+                    runtime_logger.write_event(
+                        event_type="STREAM_BANDWIDTH",
+                        message=(
+                            f"stream bandwidth: consumed {_bw['consumed_mbps']} Mbps "
+                            f"(avg {_bw['avg_mbps']}), required "
+                            f"{_req if _req is not None else 'unknown'} Mbps"
+                            + (f", ratio {_bw['ratio']}" if _bw.get("ratio") is not None else "")
+                        ),
+                        level="INFO",
+                        details=_bw,
+                        frame_idx=frame_idx,
+                    )
+
             ret, frame, frame_ist = video.read_frame(block=True, timeout=video_read_timeout)
             if not ret:
                 if stream_config.get("camera_id"):
@@ -913,6 +936,25 @@ def main(
             # Falls back to wall-clock only if grab timestamp missing.
             now_ist    = frame_ist if frame_ist is not None else datetime.now(IST)
             frame_quality_result = frame_quality_gate.evaluate(frame)
+
+            # Per-VIDEO-FRAME door-corner-ROI metrics (SSIM / light intensity / motion),
+            # logged for EVERY delivered frame regardless of window/tracking, to calibrate
+            # per-stream ssim / light / motion thresholds from proof. Pure read-only
+            # measurement — does not touch the door FSM. TEMPORARY, high volume: revert
+            # after tuning. The `quality` tag lets degraded/corrupt frames be filtered out.
+            if door_verifier is not None:
+                _dm = door_verifier.measure(frame)
+                if _dm is not None:
+                    _dm["quality"] = str(getattr(frame_quality_result, "status", ""))
+                    runtime_logger.write_event(
+                        event_type="VIDEO_FRAME",
+                        message="per-frame door-corner metrics",
+                        level="DEBUG",
+                        details=_dm,
+                        frame_idx=frame_idx,
+                        ts_ist=now_ist,
+                    )
+
             today_str  = now_ist.strftime("%Y-%m-%d")
             if last_reset_date != today_str:
                 print(f"[SYSTEM] Midnight reset for {today_str} IST.")
@@ -1559,14 +1601,14 @@ def main(
                     state_machine.session["captured_violations"].append("SAME_ID")
                     if current_auth_window != "morning":
                         persons_auth_status = False
-                        # Label by LIVE door state — evening same-person violations fire
-                        # post-close, so the capture must not hard-label DOOR_OPEN.
-                        same_id_event_type = (
-                            "DOOR_OPEN_UNAUTHORIZED_PRESENCE" if is_door_open
-                            else "DOOR_CLOSE_UNAUTHORIZED_PRESENCE"
-                        )
+                        # Evening unlocker detection runs ONLY after the door OPEN->CLOSE
+                        # transition (see the evening auth gate: auth_active requires
+                        # evening_auth_started). A SAME_ID here is therefore by definition
+                        # a post-close event, so it is always a door-CLOSE violation. Never
+                        # label by transient live door state (a momentary re-open or door-
+                        # verifier flicker must not stamp DOOR_OPEN on a post-close snap).
                         _capture(
-                            same_id_event_type,
+                            "DOOR_CLOSE_UNAUTHORIZED_PRESENCE",
                             {
                                 "authorized": False,
                                 "p1_id": state_machine.session.get("id_a")
@@ -1619,6 +1661,35 @@ def main(
                 if last_door_state is not None and last_door_state != is_door_open:
                     door_transition = "CLOSED_TO_OPEN" if is_door_open else "OPEN_TO_CLOSED"
                 last_door_state = is_door_open
+
+            # Logging-only witness of every committed door state flip, with the SSIM/
+            # gradient/intensity/visibility metrics that drove it. Lets false-positive
+            # transitions be diagnosed from real number bands (and the door-transition
+            # params tuned from evidence) without changing any verifier behavior.
+            if door_transition is not None and door_verifier is not None:
+                def _dv(attr, default=0.0):
+                    v = getattr(door_verifier, attr, default)
+                    return default if v is None else v
+                runtime_logger.write_event(
+                    event_type="DOOR_TRANSITION",
+                    message=f"door {door_transition} ({active_auth_window or 'idle'})",
+                    level="INFO",
+                    details={
+                        "transition":       door_transition,
+                        "ssim":             round(float(_dv("last_ssim", 1.0)), 4),
+                        "threshold":        round(float(_dv("similarity_threshold")), 4),
+                        "open_hysteresis":  round(float(_dv("open_hysteresis")), 4),
+                        "grad_ssim":        round(float(_dv("last_grad_ssim", 1.0)), 4),
+                        "intensity":        round(float(_dv("last_curr_mean")), 2),
+                        "intensity_diff":   round(float(_dv("last_intensity_diff")), 2),
+                        "mean_diff":        round(float(_dv("last_mean_diff")), 2),
+                        "motion_threshold": round(float(_dv("motion_threshold")), 2),
+                        "visible_ratio":    round(float(_dv("last_visible_ratio", 1.0)), 3),
+                        "debounce_frames":  int(_dv("debounce_threshold", 0)),
+                    },
+                    frame_idx=frame_idx,
+                    ts_ist=now_ist,
+                )
 
             # ===== MORNING CHECK =====
             if is_morning_window and not morning_check_done:
