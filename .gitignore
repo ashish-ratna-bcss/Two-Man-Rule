@@ -1,6 +1,8 @@
 # Logs and Session Data
 logs/
+logs2/
 logs-*/
+
 strong_room_opening/
 *.log
 

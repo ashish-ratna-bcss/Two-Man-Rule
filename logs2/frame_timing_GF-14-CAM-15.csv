@@ -1,1 +1,0 @@
-frame_idx,camera_id,t_arrival,t_inference_start,t_inference_end,gpu_mem_before_mb,gpu_mem_after_mb,num_persons,avg_confidence,wrist_keypoints
