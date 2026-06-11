@@ -1862,6 +1862,16 @@ def main(
                             frame, f"EVENING CHECK: WAITING FOR 2 UNLOCKERS ({wait_time_rem:.0f}s)",
                             (10, 130), color=(0, 255, 255), bg_color=(0, 50, 50),
                         )
+                        # Draw per-unlocker interaction progress bars (same as morning window)
+                        if locks_center:
+                            id_a_done = state_machine.session.get("id_a") is not None
+                            id_b_done = state_machine.session.get("id_b") is not None
+                            pct_a = min((state_machine.session.get("timer_a_seconds", 0) / stream_min_unlock) * 100, 100)
+                            pct_b = min((state_machine.session.get("timer_b_seconds", 0) / stream_min_unlock) * 100, 100)
+                            if not id_a_done and pct_a > 0:
+                                visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_a)
+                            elif not id_b_done and pct_b > 0:
+                                visualizer.draw_circular_progress_bar(frame, tuple(map(int, locks_center)), pct_b)
                 else:
                     if door_transition_pending:
                         visualizer.draw_status_text(
