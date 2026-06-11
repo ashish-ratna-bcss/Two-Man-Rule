@@ -269,7 +269,7 @@ STREAMS_CONFIG = [
         "site_id": "2",
         "site_name": "jubilee_hills",
         "closed_door_reference": "close_doors/closed_GF-2-CAM-21.jpg",
-        "ssim_threshold": 0.67,
+        "ssim_threshold": 0.90,
         "debounce_threshold": 20,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -539,7 +539,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 1.5,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {

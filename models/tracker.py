@@ -1,4 +1,5 @@
 # models/tracker.py
+from collections import deque
 from supervision import ByteTrack, Detections
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -16,6 +17,9 @@ class PersonTracker:
         self.reid_history = {}
         self.reid_max_history = 15
         self.aliases = {}
+        # Reverse index: true_id → [b_id_int, ...] for O(1) alias cleanup on track expiry.
+        # Without this, aliases accumulates every Re-ID ever made and never shrinks.
+        self._alias_reverse: dict = {}
         self.lost_id_frames = {}
         self.max_lost_frames = config.TRACK_BUFFER
         self.last_known_bbox = {}  # true_id → last confirmed bbox
@@ -175,6 +179,9 @@ class PersonTracker:
                 self.lost_id_frames.pop(lost_id, None)
                 self.last_known_bbox.pop(lost_id, None)
                 self.embedding_gallery.pop(lost_id, None)
+                # Remove all aliases pointing to this expired true_id (O(1) via reverse index).
+                for b_id in self._alias_reverse.pop(lost_id, []):
+                    self.aliases.pop(b_id, None)
                 continue
 
             # Skip Re-ID for protected IDs (verified + candidate unlockers): the
@@ -248,7 +255,17 @@ class PersonTracker:
                 old_true_id = det_by_b_id[best_b_id][0]
                 print(f"[REID] RESTORE: {old_true_id} -> {lost_id} "
                       f"({match_kind}_dist={best_dist:.3f}, lost_frames={frames_lost})")
+                # Keep reverse index in sync: remove previous mapping for this b_id slot.
+                if best_b_id in self.aliases:
+                    prev_tid = self.aliases[best_b_id]
+                    refs = self._alias_reverse.get(prev_tid)
+                    if refs is not None:
+                        try:
+                            refs.remove(best_b_id)
+                        except ValueError:
+                            pass
                 self.aliases[best_b_id] = lost_id
+                self._alias_reverse.setdefault(lost_id, []).append(best_b_id)
                 det_by_b_id[best_b_id] = (lost_id, det_by_b_id[best_b_id][1])
                 self.lost_id_frames[lost_id] = 0
                 current_tracked_ids.add(lost_id)
@@ -278,10 +295,20 @@ class PersonTracker:
             curr_kpts = det.get("keypoints")
             if curr_kpts is not None:
                 if true_id not in self.reid_history:
-                    self.reid_history[true_id] = []
+                    self.reid_history[true_id] = deque(maxlen=self.reid_max_history)
                 self.reid_history[true_id].append(curr_kpts)
-                if len(self.reid_history[true_id]) > self.reid_max_history:
-                    self.reid_history[true_id].pop(0)
 
         self.tracked_persons = new_tracked
         return self.tracked_persons
+
+    def reset(self) -> None:
+        """Explicit full reset — call at window end before process exit.
+        Releases all numpy arrays and track state without relying on GC.
+        """
+        self.tracked_persons.clear()
+        self.reid_history.clear()
+        self.aliases.clear()
+        self._alias_reverse.clear()
+        self.lost_id_frames.clear()
+        self.last_known_bbox.clear()
+        self.embedding_gallery.clear()

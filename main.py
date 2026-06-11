@@ -938,11 +938,17 @@ def main(
             frame_quality_result = frame_quality_gate.evaluate(frame)
 
             # Per-VIDEO-FRAME door-corner-ROI metrics (SSIM / light intensity / motion),
-            # logged for EVERY delivered frame regardless of window/tracking, to calibrate
-            # per-stream ssim / light / motion thresholds from proof. Pure read-only
-            # measurement — does not touch the door FSM. TEMPORARY, high volume: revert
-            # after tuning. The `quality` tag lets degraded/corrupt frames be filtered out.
-            if door_verifier is not None:
+            # logged for calibration during auth windows only. Gated to window hours to
+            # avoid 165 SSIM/sec CPU burn across 22 streams between windows.
+            # The `quality` tag lets degraded/corrupt frames be filtered out.
+            _in_window_now = (
+                test_window is not None
+                or debug
+                or show_all_detections
+                or (7 <= now_ist.hour <= 12)
+                or (19 <= now_ist.hour <= 23)
+            )
+            if door_verifier is not None and _in_window_now:
                 _dm = door_verifier.measure(frame)
                 if _dm is not None:
                     _dm["quality"] = str(getattr(frame_quality_result, "status", ""))
@@ -967,9 +973,10 @@ def main(
                 _presence_scan_count          = 0
                 stream_priority_active        = False
                 last_priority_activity_frame  = 0
-                lkg_detections                = []
+                del lkg_detections[:]
                 lkg_consecutive_timeouts      = 0
                 state_machine.reset_session()
+                tracker.reset()
                 last_reset_date = today_str
 
             curr_hour_min = now_ist.strftime("%H:%M")
@@ -1056,14 +1063,15 @@ def main(
                     )
 
                 state_machine.reset_session()
+                tracker.reset()
                 evening_auth_started   = False
                 presence_triggered     = False
                 _presence_scan_count   = 0
                 stream_priority_active = False
                 last_priority_activity_frame = 0
-                tracked_persons        = {}
+                tracked_persons.clear()
                 occupancy_status       = "OK"
-                lkg_detections         = []
+                del lkg_detections[:]
                 lkg_consecutive_timeouts = 0
                 auth_result = {
                     "authorized":        False,
@@ -1990,6 +1998,14 @@ def main(
             _completed_window = active_auth_window or _current_window_name()
             _completed_date = datetime.now(IST).strftime("%Y-%m-%d")
             _mark_window_complete(cam_id, _completed_date, _completed_window)
+
+        # Explicit release of all in-session state — no relying on GC.
+        # Releases numpy arrays (embedding gallery, keypoint history, frame refs)
+        # held in tracker and local loop vars before the CUDA context teardown.
+        tracker.reset()
+        lkg_detections.clear()
+        tracked_persons.clear()
+        state_machine.reset_session()
 
         # Hard-release GPU by exiting the process. empty_cache() does NOT free
         # the CUDA context, cuDNN workspace, or cuBLAS handles — only process
