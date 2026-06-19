@@ -327,7 +327,7 @@ STREAMS_CONFIG = [
 
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([(2342, 106), (2197, 81), (2082, 24), (2070, 47), (2310, 165)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[1859.104942007931, 5.622578859988942], [1839.5516852120613, 96.82309304950807], [1897.768101919044, 41.670698274471825], [2000.719238832445, 41.05789388808254], [2002.074873754841, 4.796163069544375]], np.int32),
             "LOCKS_ROI": np.array([(1717, 106), (1608, 393), (2131, 631), (2240, 294)], np.int32),
             "STANDING_ZONE": np.array([[1587, 576], [2035, 815], [1947, 980], [1480, 716]], np.int32),
             "DOOR_ROI": np.array([[1750, 5], [1563, 550], [2095, 801], [2460, 5]], np.int32),
@@ -393,15 +393,13 @@ STREAMS_CONFIG = [
         # Lowered below the evening closed band (active ~0.52 after twilight relax →
         # closed margin +0.10). Single-frame estimate; confirm/refine from VIDEO_FRAME
         # logs. Better long-term fix: an evening-lit closed_door_reference.
-        # UPDATE: New logs show OPEN SSIM ~0.51-0.66 and CLOSED SSIM ~0.84-0.97. 
-        # Updating threshold to 0.75 for safe margin on both sides.
-        "ssim_threshold": 0.75,
+        "ssim_threshold": 0.55,
         "door_open_hysteresis": 0.06,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 4.0,
+        "min_unlock_seconds": 5.0,
         "max_unlock_seconds": 10.0,
 
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -434,7 +432,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(26, 48), (2646, 35), (2659, 1485), (32, 1485)], np.int32),
             "STANDING_ZONE": np.array([(444, 1153), (1266, 962), (1452, 1370), (550, 1511)], np.int32),
             "LOCKS_ROI": np.array([(424, 1300), (548, 256), (1768, 266), (1678, 1347)], np.int32),
-            "DOOR_CORNER_ROI": np.array([(767, 86), (970, 98), (722, 185)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(798.5931254996001, 64.10871302957635), (855.8912869704234, 60.52757793764989), (864.8441247002395, 10.391686650679482), (1036.7386091127096, 10.391686650679482), (743.08553157474, 207.35411670663467)], np.int32),
             "DOOR_ROI": np.array([(621, 20), (1899, 23), (1641, 1334), (413, 1240)], np.int32)
         }
     }
@@ -446,7 +444,7 @@ STREAMS_CONFIG = [
         "site_id": "31",
         "site_name": "nizamabad",
         "closed_door_reference": "close_doors/closed_GF-31-CAM-16.jpg",
-        "ssim_threshold": 0.89,
+        "ssim_threshold": 0.833,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -456,9 +454,9 @@ STREAMS_CONFIG = [
 
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_ROI": np.array([(110, 582), (363, 1347), (762, 1977), (1536, 1555), (1323, 238), (947, 147)], np.int32),
-            "STANDING_ZONE": np.array([(1310, 1522), (1640, 1831), (940, 2160), (733, 1909)], np.int32),
-            "LOCKS_ROI": np.array([(236, 1062), (970, 609), (1224, 1374), (594, 1777)], np.int32),
+            "DOOR_ROI": np.array([(192, 599), (977, 207), (1170, 298), (1521, 1608), (893, 2068)], np.int32),
+            "STANDING_ZONE": np.array([(278, 996), (1020, 636), (1372, 1563), (720, 1914)], np.int32),
+            "LOCKS_ROI": np.array([(1346, 1518), (1640, 1728), (1169, 2092), (918, 1811)], np.int32),
             "DOOR_CORNER_ROI": np.array([(409.72072155070737, 479.8188706883842), (487.6075140035375, 673.6301914431011), (527.456570607311, 497.932078235554), (715.833929097877, 374.76226691479934), (695.9094007959902, 325.8566065374409)], np.int32),
             "INTERACTION_ZONE": np.array([(42, 709), (114, 2094), (3316, 2099), (3628, 505), (2197, 25)], np.int32)
         }
@@ -474,7 +472,7 @@ STREAMS_CONFIG = [
         "site_id": "4",
         "site_name": "vijayawada",
         "closed_door_reference": "close_doors/closed_GF-4-CAM-20.jpg",
-        "ssim_threshold": 0.653,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 5,
         "intensity_threshold": 10,
         "motion_threshold": 3.0,
@@ -545,7 +543,7 @@ STREAMS_CONFIG = [
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([[1914, 4], [1901, 52], [2084, 4]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2023, 8], [1990, 82], [2082, 73], [2216, 134], [2235, 87]], np.int32),
             "INTERACTION_ZONE": np.array([[29, 14], [2639, 19], [2649, 1477], [39, 1487]], np.int32),
             "LOCKS_ROI": np.array([[2294, 461], [1833, 140], [1667, 524], [2056, 835]], np.int32),
             "DOOR_ROI": np.array([[1867, 19], [2494, 189], [1925, 1054], [1453, 646]], np.int32),
@@ -564,13 +562,13 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "LOCKS_ROI": np.array([[2366, 483], [3161, 770], [2893, 1643], [2108, 1316]], np.int32),
-            "DOOR_CORNER_ROI": np.array([[2593, 213], [2741, 249], [2591, 268]], np.int32),
-            "STANDING_ZONE": np.array([[2437, 1370], [2924, 1560], [2817, 1833], [2252, 1550]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2657, 249], [2645, 364], [2760, 330], [2939, 371], [2943, 319]], np.int32),
+            "STANDING_ZONE": np.array([[2437, 1370], [2924, 1560], [2817, 1833], [2252, 1550]], np.int32),   
             "DOOR_ROI": np.array([[2326, 62], [3261, 332], [3022, 1689], [2286, 1396]], np.int32),
             "INTERACTION_ZONE": np.array([[45, 39], [3791, 44], [3786, 2126], [45, 2111]], np.int32)
         }
@@ -587,7 +585,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
@@ -610,7 +608,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 3.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
@@ -638,7 +636,7 @@ STREAMS_CONFIG = [
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "STANDING_ZONE": np.array([[1955, 957], [2341, 1200], [2221, 1438], [1811, 1156]], np.int32),
-            "DOOR_CORNER_ROI": np.array([[2217, 277], [2330, 324], [2207, 326]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2283.40, 312.60], [2247.07, 389.08], [2316.86, 376.65], [2456.43, 399.60]], np.int32),
             "INTERACTION_ZONE": np.array([[60, 48], [47, 1479], [2638, 1486], [2635, 41]], np.int32),
             "LOCKS_ROI": np.array([[2123, 470], [2593, 676], [2421, 1143], [1975, 916]], np.int32),
             "DOOR_ROI": np.array([[2157, 216], [2675, 446], [2294, 1438], [1828, 1153]], np.int32)
@@ -661,7 +659,7 @@ STREAMS_CONFIG = [
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "INTERACTION_ZONE": np.array([[45, 64], [3790, 49], [3800, 2111], [40, 2106]], np.int32),
-            "DOOR_CORNER_ROI": np.array([[506, 445], [785, 295], [532, 552]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[545.7116015747183, 541.2324114892866], [807.9574570642396, 421.1198059215669], [829.9781014183216, 475.1704784270408], [656.882490659258, 553.7512846865362], [593.2990716801556, 711.6135662898249]], np.int32),
             "STANDING_ZONE": np.array([[942, 1775], [1142, 2082], [1786, 1638], [1562, 1399]], np.int32),
             "LOCKS_ROI": np.array([[421, 911], [1288, 495], [1571, 1224], [793, 1706]], np.int32),
             "DOOR_ROI": np.array([[301, 461], [1246, 30], [1648, 1474], [920, 1902]], np.int32)
@@ -674,18 +672,18 @@ STREAMS_CONFIG = [
         "site_id": "23",
         "site_name": "tirupathi-store",
         "closed_door_reference": "close_doors/closed_GF-23-CAM-21.jpg",
-        "ssim_threshold": 0.646,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([[1907, 6], [1907, 59], [2071, 5]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2016.9267951023783, 10.108836008116578], [2011.3788311298063, 127.14078374455725], [2067.982604714712, 53.991291727140755], [2203.8316613184857, 51.37880986937588], [2204.702488604407, 7.837445573294626]], np.int32),
             "INTERACTION_ZONE": np.array([[52, 68], [3766, 46], [3781, 2084], [59, 2114]], np.int32),
-            "LOCKS_ROI": np.array([[1732, 215], [2234, 225], [2230, 780], [1752, 746]], np.int32),
+            "LOCKS_ROI": np.array([[2332.853717026378, 264.33710174717356], [1487.0101169064742, 58.12949640287767], [1580.938174460431, 612.4892086330933], [2280.7942895683445, 820.6043165467622]], np.int32),
             "STANDING_ZONE": np.array([[1996, 1375], [2144, 1056], [1778, 785], [1523, 953]], np.int32),
             "DOOR_ROI": np.array([[1591, 24], [2390, 26], [2230, 1153], [1591, 874]], np.int32)
         }
@@ -697,18 +695,18 @@ STREAMS_CONFIG = [
         "site_id": "25",
         "site_name": "bhimavaram-store",
         "closed_door_reference": "close_doors/closed_GF-25-CAM-30.jpg",
-        "ssim_threshold": 0.644,
+        "ssim_threshold": 0.80,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
             "INTERACTION_ZONE": np.array([[55.964125560538115, 64.03587443946188], [3792.6457399103138, 55.426008968609864], [3788.3408071748877, 2113.183856502242], [55.964125560538115, 2100.269058295964]], np.int32),
-            "DOOR_CORNER_ROI": np.array([[1292.3076923076915, 0], [1494.3635601716098, 5.381165919282507], [1293.9708939708933, 74.01247401247397]], np.int32),
-            "LOCKS_ROI": np.array([[1203.7729777115803, 168.21741825289763], [1932.7897642823236, 104.26857732563946], [2022.3181415804852, 728.4092647756793], [1288.1854477355612, 879.3285293640085]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[1306.2446253934347, 19.71223021582733], [1657.1428571428564, 14.28571428571428], [1657.1428571428564, 46.28571428571426], [1417.1428571428564, 82.85714285714282], [1309.714285714285, 178.85714285714278]], np.int32),
+            "LOCKS_ROI": np.array([[1203.7729777115803, 168.21741825289763], [1932.7897642823236, 104.26857732563946], [2022.3181415804852, 728.4092647756793], [1288.1854477355612, 879.3285293640085]], np.int32),  
             "STANDING_ZONE": np.array([[1371.2570295399462, 1125.1281929135391], [2047.679793767588, 752.8955475101623], [2303.839893830127, 921.0006131762034], [1619.4121264755308, 1373.2832898491238]], np.int32),
             "DOOR_ROI": np.array([[1172.5119142773647, 1.5401540154015394], [1303.938390258296, 1144.481114778144], [2071.375133932663, 1031.8298496516313], [2050.253021721442, 3.887055372203885]], np.int32)
         }
@@ -720,17 +718,17 @@ STREAMS_CONFIG = [
         "site_id": "29",
         "site_name": "vizianagaram-store",
         "closed_door_reference": "close_doors/closed_GF-29-CAM-13.jpg",
-        "ssim_threshold": 0.713,
+        "ssim_threshold": 0.813,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([[2301.022594424459, 433.1779310926256], [2477.2144409472407, 627.6335665842322], [2240.8595248800943, 547.058027015887]], np.int32),
-            "INTERACTION_ZONE": np.array([[29.007194244604317, 41.26618705035976], [2655.7697841726617, 28.37410071942451], [2655.7697841726617, 1478.7338129496404], [32.23021582733813, 1501.294964028777]], np.int32),
+            "DOOR_CORNER_ROI": np.array([[2390.7924528301887, 540.125786163522], [2292.805031446541, 705.0314465408804], [2429.0314465408806, 697.8616352201258], [2538.9685534591194, 822.1383647798742], [2629.7861635220124, 834.0880503144654]], np.int32),
+            "INTERACTION_ZONE": np.array([[29.007194244604317, 41.26618705035976], [2655.7697841726617, 28.37410071942451], [2655.7697841726617, 1478.7338129496404], [32.23021582733813, 1501.294964028777]], np.int32), 
             "LOCKS_ROI": np.array([[2530.071942446043, 1488.4028776978419], [1717.8705035971223, 563.3956834532374], [1434.2446043165467, 1146.7625899280577], [1543.8273381294964, 1514.1870503597122]], np.int32),
             "DOOR_ROI": np.array([[2272.2302158273383, 266.8776978417267], [2671.884892086331, 721.3237410071943], [2658.9928057553957, 1488.4028776978419], [1166.7338129496402, 1514.1870503597122], [1685.6402877697842, 286.21582733812954]], np.int32),
             "STANDING_ZONE": np.array([[1457.4709193245778, 1334.9193245778613], [1110.9811320754718, 1345.5345911949685], [1127.7106918238994, 1520], [1507.7106918238994, 1520]], np.int32)
@@ -755,7 +753,7 @@ STREAMS_CONFIG = [
 
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([(803, 2), (908, 1), (798, 37)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(806.9950193691197, 2.235749861649161), (794.1855746172288, 97.02416717467368), (1075.9933591588263, 2.235749861649161)], np.int32),
             "DOOR_ROI": np.array([(581, 3), (1187, 0), (1034, 742), (471, 797)], np.int32),
             "LOCKS_ROI": np.array([(526, 81), (1144, 49), (1106, 557), (501, 588)], np.int32),
             "STANDING_ZONE": np.array([(545, 897), (544, 1103), (1165, 1050), (1154, 853)], np.int32),
@@ -769,7 +767,7 @@ STREAMS_CONFIG = [
         "site_id": "34",
         "site_name": "ub-city-banglore-store",
         "closed_door_reference": "close_doors/closed_FF-34-CAM-04.jpg",
-        "ssim_threshold": 0.96,
+        "ssim_threshold": 0.863,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -781,7 +779,7 @@ STREAMS_CONFIG = [
         "rois": {
             "DOOR_CORNER_ROI": np.array([(1606.788415421508, 4.205866076369671), (1772.0715735104213, 0.664084117321527), (1592.6212875853153, 64.41615938018812)], np.int32),
             "INTERACTION_ZONE": np.array([(50.431519699812384, 64.16510318949344), (3775.1594746716696, 56.96060037523452), (3789.5684803001873, 2124.6529080675423), (50.431519699812384, 2095.8348968105065)], np.int32),
-            "LOCKS_ROI": np.array([(1555.8404058003591, 118.37802485284494), (2049.7579989985275, 122.56376716808366), (1999.529091215663, 547.4166121648134), (1507.7043691751137, 557.8809679529102)], np.int32),
+            "LOCKS_ROI": np.array([(1558.1007264500893, 111.79856115107908), (2223.4245025854307, 148.6330935251798), (2096.8057975494594, 595.2517985611508), (1500.546769615557, 595.2517985611508)], np.int32),
             "DOOR_ROI": np.array([(1559.1890124264219, 9.548724656638322), (2074.035317200784, 3.270111183780247), (1958.9274035317192, 750.4251144538911), (1446.1739699149764, 794.3754087638977)], np.int32),
             "STANDING_ZONE": np.array([(1894.885533334695, 721.1249182472201), (2041.38651436805, 886.4617396991493), (1589.3263443222688, 978.5480706344011), (1468.4086445185906, 785.6387514924097)], np.int32)
         }
@@ -806,8 +804,8 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(2699.773975462486, 596.1973278520038), (2535.3340987923934, 770.5035971223017), (2956.30018306783, 967.8314491264126), (3092.7852807040067, 737.6156217882833)], np.int32),
             "INTERACTION_ZONE": np.array([(41.43884892086331, 0), (3780.143884892086, 0), (3783.8273346166816, 2115.971223021583), (49.72661519222122, 2115.971223021583)], np.int32),
             "DOOR_CORNER_ROI": np.array([(2612.4184306401016, 3.0252720900202896), (2777.701588729015, 0.664084117321527), (2646.655656244234, 80.94447518907945)], np.int32),
-            "LOCKS_ROI": np.array([(3008.153477218224, 4.796163069544362), (3173.908872901677, 603.3573141486808), (2553.860911270982, 511.270983213429), (2360.4796163069536, 4.796163069544362)], np.int32),
-            "DOOR_ROI": np.array([(3056.038388039567, 1.7266187050359705), (3258.356516768292, 878.4990619136959), (2549.5635678956824, 750.6954436450836), (2340.8345511091115, 1.7266187050359705)], np.int32)
+            "LOCKS_ROI": np.array([(3018.7574088456495, 32.57030739045126), (3146.42254946043, 566.2524525833876), (2443.5379086436724, 554.0414727041895), (2227.652111265532, 36.756049705689975)], np.int32),
+            "DOOR_ROI": np.array([(2612.4184306401016, 3.0252720900202896), (2777.701588729015, 0.664084117321527), (2646.655656244234, 80.94447518907945)], np.int32)
         }
     },
     # Tamil Nadu streams Below
@@ -858,7 +856,7 @@ STREAMS_CONFIG = [
         "rois": {
             "STANDING_ZONE": np.array([[2421, 1310], [2071, 1614], [2785, 2129], [3066, 1779]], np.int32),
             "INTERACTION_ZONE": np.array([[50, 57], [3798, 34], [3798, 2102], [50, 2111]], np.int32),
-            "LOCKS_ROI": np.array([[3508, 845], [2477, 389], [2283, 1268], [3149, 1733]], np.int32),
+            "LOCKS_ROI": np.array([[3355.9943794964015, 315.9712230215826], [3017.116681654675, 131.79856115107907], [2947.131070143884, 328.86330935251783]], np.int32),
             "DOOR_ROI": np.array([[3651, 389], [3061, 1867], [2223, 1402], [2527, 7]], np.int32),
             "DOOR_CORNER_ROI": np.array([[2899, 111], [2879, 203], [3192, 182]], np.int32)
         }
