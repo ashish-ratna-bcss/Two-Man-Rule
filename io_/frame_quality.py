@@ -123,10 +123,12 @@ class FrameQualityGate:
 
     def _classify(self, frame: np.ndarray):
         metrics: Dict[str, float] = {}
+
         if frame is None or not isinstance(frame, np.ndarray) or frame.ndim != 3 or frame.shape[2] != 3:
             return FrameQualityStatus.CORRUPT, "invalid_frame_shape", metrics, None
 
         height, width = frame.shape[:2]
+
         if height < 16 or width < 16:
             return FrameQualityStatus.CORRUPT, "frame_too_small", metrics, None
 
@@ -138,11 +140,16 @@ class FrameQualityGate:
 
         if self._last_gray_small is not None:
             frame_delta = float(np.mean(cv2.absdiff(gray_small, self._last_gray_small)))
+
+            print(f"<<<<<<<<<<<<<<< frame_delta: {frame_delta} >>>>>>>>>>>>>>>>>>>>")
+
             metrics["frame_delta"] = frame_delta
+
             if frame_delta < 0.2:
                 self._stale_frames += 1
             else:
                 self._stale_frames = 0
+
             if self._stale_frames >= self.stale_after_frames:
                 return FrameQualityStatus.STALE, "repeated_identical_frames", metrics, gray_small
         else:
@@ -157,7 +164,11 @@ class FrameQualityGate:
             if good_delta > 95.0 and good_delta_std > 40.0:
                 return FrameQualityStatus.SUSPECT, "sudden_spatial_frame_change", metrics, gray_small
 
+        print(f"<<<<<<<<<<<<<<< metrics: {metrics} >>>>>>>>>>>>>>>>>>>>")
+
+        
         frame_reason = self._artifact_reason(metrics, "frame")
+
         if frame_reason:
             return FrameQualityStatus.CORRUPT, frame_reason, metrics, gray_small
 
@@ -187,6 +198,7 @@ class FrameQualityGate:
         right_mean = float(np.mean(right))
 
         cell_white_max = self._cell_white_max(gray_patch)
+
         flat_white_frac = self._flat_white_frac(gray_patch)
 
         return {
@@ -210,9 +222,15 @@ class FrameQualityGate:
         for i in range(rows):
             for j in range(cols):
                 cell = gray_patch[i * ch:(i + 1) * ch, j * cw:(j + 1) * cw]
+
                 if cell.size == 0:
+                    #print(f"<<<<<<<<<<<<<<< cell ({i}, {j}) is empty >>>>>>>>>>>>>>>>>>>>")
                     continue
-                r = float(np.mean(cell >= 245))
+
+                r = float(np.mean(cell >= 1000)) #old 245
+
+                #print(f"<<<<<<<<<<<<<<< cell ({i}, {j}) white ratio: {r} >>>>>>>>>>>>>>>>>>>>")
+
                 if r > best:
                     best = r
         return best
@@ -240,9 +258,11 @@ class FrameQualityGate:
         if white_ratio >= 0.65:
             return f"{prefix}_large_white_block"
         # Localized decode blowout: a single grid cell fully saturated, or a flat
+
         # (zero-texture) saturated region — both stay under the global white_ratio.
         if metrics.get(f"{prefix}_cell_white_max", 0.0) >= self._cell_white_ratio:
             return f"{prefix}_cell_white_block"
+        
         if metrics.get(f"{prefix}_flat_white_frac", 0.0) >= self._flat_white_fraction:
             return f"{prefix}_flat_white_block"
         if black_ratio >= 0.85:
