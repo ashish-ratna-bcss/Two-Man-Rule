@@ -327,7 +327,7 @@ STREAMS_CONFIG = [
 
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_CORNER_ROI": np.array([[1859.104942007931, 5.622578859988942], [1839.5516852120613, 96.82309304950807], [1897.768101919044, 41.670698274471825], [2000.719238832445, 41.05789388808254], [2002.074873754841, 4.796163069544375]], np.int32),
+            "DOOR_CORNER_ROI": np.array([(2342, 106), (2197, 81), (2082, 24), (2070, 47), (2310, 165)], np.int32),
             "LOCKS_ROI": np.array([(1717, 106), (1608, 393), (2131, 631), (2240, 294)], np.int32),
             "STANDING_ZONE": np.array([[1587, 576], [2035, 815], [1947, 980], [1480, 716]], np.int32),
             "DOOR_ROI": np.array([[1750, 5], [1563, 550], [2095, 801], [2460, 5]], np.int32),
@@ -393,13 +393,15 @@ STREAMS_CONFIG = [
         # Lowered below the evening closed band (active ~0.52 after twilight relax →
         # closed margin +0.10). Single-frame estimate; confirm/refine from VIDEO_FRAME
         # logs. Better long-term fix: an evening-lit closed_door_reference.
-        "ssim_threshold": 0.55,
+        # UPDATE: New logs show OPEN SSIM ~0.51-0.66 and CLOSED SSIM ~0.84-0.97. 
+        # Updating threshold to 0.75 for safe margin on both sides.
+        "ssim_threshold": 0.75,
         "door_open_hysteresis": 0.06,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
 
         "evening_second_unlocker_timeout_seconds": 300.0,
@@ -432,7 +434,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(26, 48), (2646, 35), (2659, 1485), (32, 1485)], np.int32),
             "STANDING_ZONE": np.array([(444, 1153), (1266, 962), (1452, 1370), (550, 1511)], np.int32),
             "LOCKS_ROI": np.array([(424, 1300), (548, 256), (1768, 266), (1678, 1347)], np.int32),
-            "DOOR_CORNER_ROI": np.array([(798.5931254996001, 64.10871302957635), (855.8912869704234, 60.52757793764989), (864.8441247002395, 10.391686650679482), (1036.7386091127096, 10.391686650679482), (743.08553157474, 207.35411670663467)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(767, 86), (970, 98), (722, 185)], np.int32),
             "DOOR_ROI": np.array([(621, 20), (1899, 23), (1641, 1334), (413, 1240)], np.int32)
         }
     }
@@ -444,7 +446,7 @@ STREAMS_CONFIG = [
         "site_id": "31",
         "site_name": "nizamabad",
         "closed_door_reference": "close_doors/closed_GF-31-CAM-16.jpg",
-        "ssim_threshold": 0.833,
+        "ssim_threshold": 0.89,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -454,9 +456,9 @@ STREAMS_CONFIG = [
 
         "evening_second_unlocker_timeout_seconds": 300.0,
         "rois": {
-            "DOOR_ROI": np.array([(192, 599), (977, 207), (1170, 298), (1521, 1608), (893, 2068)], np.int32),
-            "STANDING_ZONE": np.array([(278, 996), (1020, 636), (1372, 1563), (720, 1914)], np.int32),
-            "LOCKS_ROI": np.array([(1346, 1518), (1640, 1728), (1169, 2092), (918, 1811)], np.int32),
+            "DOOR_ROI": np.array([(110, 582), (363, 1347), (762, 1977), (1536, 1555), (1323, 238), (947, 147)], np.int32),
+            "STANDING_ZONE": np.array([(1310, 1522), (1640, 1831), (940, 2160), (733, 1909)], np.int32),
+            "LOCKS_ROI": np.array([(236, 1062), (970, 609), (1224, 1374), (594, 1777)], np.int32),
             "DOOR_CORNER_ROI": np.array([(409.72072155070737, 479.8188706883842), (487.6075140035375, 673.6301914431011), (527.456570607311, 497.932078235554), (715.833929097877, 374.76226691479934), (695.9094007959902, 325.8566065374409)], np.int32),
             "INTERACTION_ZONE": np.array([(42, 709), (114, 2094), (3316, 2099), (3628, 505), (2197, 25)], np.int32)
         }
@@ -761,13 +763,13 @@ STREAMS_CONFIG = [
         }
     },
     # Stream 19 - UBCity Bangalore
-    {
+        {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.89.106:8002/Streaming/Channels/401",
         "camera_id": "FF-34-CAM-4",
         "site_id": "34",
         "site_name": "ub-city-banglore-store",
         "closed_door_reference": "close_doors/closed_FF-34-CAM-04.jpg",
-        "ssim_threshold": 0.863,
+        "ssim_threshold": 0.96,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
@@ -779,7 +781,7 @@ STREAMS_CONFIG = [
         "rois": {
             "DOOR_CORNER_ROI": np.array([(1606.788415421508, 4.205866076369671), (1772.0715735104213, 0.664084117321527), (1592.6212875853153, 64.41615938018812)], np.int32),
             "INTERACTION_ZONE": np.array([(50.431519699812384, 64.16510318949344), (3775.1594746716696, 56.96060037523452), (3789.5684803001873, 2124.6529080675423), (50.431519699812384, 2095.8348968105065)], np.int32),
-            "LOCKS_ROI": np.array([(1558.1007264500893, 111.79856115107908), (2223.4245025854307, 148.6330935251798), (2096.8057975494594, 595.2517985611508), (1500.546769615557, 595.2517985611508)], np.int32),
+            "LOCKS_ROI": np.array([(1555.8404058003591, 118.37802485284494), (2049.7579989985275, 122.56376716808366), (1999.529091215663, 547.4166121648134), (1507.7043691751137, 557.8809679529102)], np.int32),
             "DOOR_ROI": np.array([(1559.1890124264219, 9.548724656638322), (2074.035317200784, 3.270111183780247), (1958.9274035317192, 750.4251144538911), (1446.1739699149764, 794.3754087638977)], np.int32),
             "STANDING_ZONE": np.array([(1894.885533334695, 721.1249182472201), (2041.38651436805, 886.4617396991493), (1589.3263443222688, 978.5480706344011), (1468.4086445185906, 785.6387514924097)], np.int32)
         }
