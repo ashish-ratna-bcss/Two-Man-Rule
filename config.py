@@ -214,55 +214,55 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(272, 160), (1857, 2), (1750, 714), (275, 1392)], np.int32)
         }
     },
-    # Disabled Stream - Somajiguda FF
-    # {
-    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
-    #     "camera_id": "FF-1-CAM-42",
-    #     "site_id": "1",
-    #     "site_name": "somajiguda",
-    #     "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
-    #     "ssim_threshold": 0.80,
-    #     "debounce_threshold": 15,
-    #     "intensity_threshold": 6,
-    #     "motion_threshold": 3.0,
-    #     "door_corner_min_visible_ratio": 0.5,
-    #     "min_unlock_seconds": 2.5,
-    #     "max_unlock_seconds": 10.0,
+    # Somajiguda FF-stream-1
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8002/Streaming/Channels/4201",
+        "camera_id": "FF-1-CAM-42",
+        "site_id": "1",
+        "site_name": "somajiguda",
+        "closed_door_reference": "close_doors/closed_FF-1-CAM-42.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 15,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 2.5,
+        "max_unlock_seconds": 10.0,
 
-    #     "evening_second_unlocker_timeout_seconds": 300.0,
-    #     "rois": {
-    #         "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
-    #         "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
-    #         "DOOR_CORNER_ROI": np.array([[423, 33], [420, 11], [442, 3], [620, 1]], np.int32),
-    #         "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
-    #         "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
-    #     }
-    # },
-    # # Disabled Stream - additional Somajiguda stream
-    # {
-    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8004/Streaming/Channels/301",
-    #     "camera_id": "TF-1-CAM-03",
-    #     "site_id": "1",
-    #     "site_name": "somajiguda",
-    #     "closed_door_reference": "close_doors/closed_TF-1-CAM-03.jpg",
-    #     "ssim_threshold": 0.80,
-    #     "debounce_threshold": 20,
-    #     "intensity_threshold": 6,
-    #     "motion_threshold": 3.0,
-    #     "door_corner_min_visible_ratio": 0.5,
-    #     "min_unlock_seconds": 5.0,
-    #     "max_unlock_seconds": 10.0,
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "LOCKS_ROI": np.array([(333, 247), (809, 150), (876, 558), (433, 683)], np.int32),
+            "DOOR_ROI": np.array([(401, 1), (817, 0), (891, 638), (548, 776)], np.int32),
+            "DOOR_CORNER_ROI": np.array([[423, 33], [420, 11], [442, 3], [620, 1]], np.int32),
+            "STANDING_ZONE": np.array([(595, 892), (644, 996), (733, 950), (699, 814), (575, 858)], np.int32),
+            "INTERACTION_ZONE": np.array([(7, 2), (2, 1272), (2085, 1009), (2114, 4)], np.int32)
+        }
+    },
+    #  Somajiguda tf-stream-2
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.108.159:8004/Streaming/Channels/301",
+        "camera_id": "TF-1-CAM-3",
+        "site_id": "1",
+        "site_name": "somajiguda",
+        "closed_door_reference": "close_doors/closed_TF-1-CAM-03.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 5.0,
+        "max_unlock_seconds": 10.0,
 
-    #     "evening_second_unlocker_timeout_seconds": 300.0,
-    #     "rois": {
-    #         "STANDING_ZONE": np.array([(2695.7683372532724, 449.2897989300864), (2689.3931009038906, 550.1125226621584), (2518.2069728832303, 509.9723271262794), (2530.012912746724, 404.89946234118446)], np.int32),
-    #         "LOCKS_ROI": np.array([(2427.301235934328, 51.42962553034492), (2744.961941161355, 90.19527235354568), (2712.0739658273365, 384.8715313463512), (2395.425198302895, 326.50802434975077)], np.int32),
-    #         "DOOR_ROI": np.array([(2755.4860932682404, 6.002055498458372), (2693.6566996402858, 504.5837615621785), (2355.568313206576, 417.7595066803697), (2402.9269976875626, 4.6865364850976325)], np.int32),
-    #         "DOOR_CORNER_ROI": np.array([(2509.4705485611494, 3.0252720900202896), (2576.7644057830644, 4.205866076369671), (2507.1093605884507, 34.901309721453586)], np.int32),
-    #         "INTERACTION_ZONE": np.array([(15.347721822541956, 11.289429994465959), (3830.520491694877, 11.595429538721955), (3804.3462345508183, 2130.4556354916053), (41.43884892086331, 2129.7841726618703)], np.int32)
-    #     }
-    # },
-    # Stream 1
+        "evening_second_unlocker_timeout_seconds": 300.0,
+        "rois": {
+            "STANDING_ZONE": np.array([(2695.7683372532724, 449.2897989300864), (2689.3931009038906, 550.1125226621584), (2518.2069728832303, 509.9723271262794), (2530.012912746724, 404.89946234118446)], np.int32),
+            "LOCKS_ROI": np.array([(2427.301235934328, 51.42962553034492), (2744.961941161355, 90.19527235354568), (2712.0739658273365, 384.8715313463512), (2395.425198302895, 326.50802434975077)], np.int32),
+            "DOOR_ROI": np.array([(2755.4860932682404, 6.002055498458372), (2693.6566996402858, 504.5837615621785), (2355.568313206576, 417.7595066803697), (2402.9269976875626, 4.6865364850976325)], np.int32),
+            "DOOR_CORNER_ROI": np.array([(2509.4705485611494, 3.0252720900202896), (2576.7644057830644, 4.205866076369671), (2507.1093605884507, 34.901309721453586)], np.int32),
+            "INTERACTION_ZONE": np.array([(15.347721822541956, 11.289429994465959), (3830.520491694877, 11.595429538721955), (3804.3462345508183, 2130.4556354916053), (41.43884892086331, 2129.7841726618703)], np.int32)
+        }
+    },
+    # Stream 3
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8001/Streaming/Channels/2101",
         "camera_id": "GF-2-CAM-21",
@@ -274,7 +274,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 4.0,
         "max_unlock_seconds": 10.0,
 
         "evening_second_unlocker_timeout_seconds": 50.0,
@@ -286,7 +286,52 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([[6, 11], [2615, 0], [1927, 1511], [25, 1508]], np.int32)
         }
     },
-    # Stream 2
+    #  Jubilee Hills stream-4
+    {
+        "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8002/Streaming/Channels/1101",
+        "camera_id": "FF-2-CAM-11",
+        "site_id": "2",
+        "site_name": "jubilee_hills",
+        "closed_door_reference": "close_doors/closed_FF-2-CAM-11.jpg",
+        "ssim_threshold": 0.80,
+        "debounce_threshold": 20,
+        "intensity_threshold": 6,
+        "motion_threshold": 3.0,
+        "door_corner_min_visible_ratio": 0.5,
+        "min_unlock_seconds": 4.0,
+        "max_unlock_seconds": 10.0,
+
+        "evening_second_unlocker_timeout_seconds": 50.0,
+        "rois": {
+            "STANDING_ZONE": np.array(
+                [(545.8414513929836, 740.9811320754717), (1106.8980551665684, 572.9811320754717),
+                 (1279.5395683453237, 821.2374100719425), (667.1654676258993, 1040.4028776978419)],
+                np.int32
+            ),
+            "DOOR_ROI": np.array(
+                [(513.2535807291663, 6.609686609686621), (1219.7150997150989, 5.014245014245027),
+                 (1402.3931623931621, 139.4871794871795), (1373.6752136752134, 917.2649572649572),
+                 (516.4444444444445, 1108.4444444444446)],
+                np.int32
+            ),
+            "LOCKS_ROI": np.array(
+                [(512.278068529673, 16.720451293957353), (1292.6394786215064, 11.411870272924473),
+                 (1199.739310753431, 799.7361518963072), (531.9259259259259, 852.8888888888889)],
+                np.int32
+            ),
+            "DOOR_CORNER_ROI": np.array(
+                [(562.8413531510314, 57.5085195001893), (667.1654728026784, 54.964028776978395),
+                 (560.2968624278205, 89.73873532752741)],
+                np.int32
+            ),
+            "INTERACTION_ZONE": np.array(
+                [(45.388367729831145, 48.91557223264539), (2634.5925925925926, 30.962962962962962),
+                 (2637.5684803001877, 1481.1707317073171), (40.34521575984991, 1460.9981238273922)],
+                np.int32
+            )
+        }
+    },
+    # Stream 5
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.97.83:8001/Streaming/Channels/1801",
         "camera_id": "GF-6-CAM-18",
@@ -310,7 +355,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([[0, 8], [10, 1511], [2679, 1511], [2688, 24]], np.int32)
         }
     },
-    # Stream 3
+    # Stream 6
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.106.41:8001/Streaming/Channels/2901",
         "camera_id": "GF-10-CAM-29",
@@ -334,58 +379,13 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([[0, 5], [3, 224], [1369, 1520], [2685, 1511], [2688, 5]], np.int32)
         }
     },
-    # Disabled Stream - additional Jubilee Hills stream
-    # {
-    #     "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.121.130:8002/Streaming/Channels/1101",
-    #     "camera_id": "FF-2-CAM-11",
-    #     "site_id": "2",
-    #     "site_name": "jubilee_hills",
-    #     "closed_door_reference": "close_doors/closed_FF-2-CAM-11.jpg",
-    #     "ssim_threshold": 0.80,
-    #     "debounce_threshold": 20,
-    #     "intensity_threshold": 6,
-    #     "motion_threshold": 3.0,
-    #     "door_corner_min_visible_ratio": 0.5,
-    #     "min_unlock_seconds": 5.0,
-    #     "max_unlock_seconds": 10.0,
-
-    #     "evening_second_unlocker_timeout_seconds": 50.0,
-    #     "rois": {
-    #         "STANDING_ZONE": np.array(
-    #             [(545.8414513929836, 740.9811320754717), (1106.8980551665684, 572.9811320754717),
-    #              (1279.5395683453237, 821.2374100719425), (667.1654676258993, 1040.4028776978419)],
-    #             np.int32
-    #         ),
-    #         "DOOR_ROI": np.array(
-    #             [(513.2535807291663, 6.609686609686621), (1219.7150997150989, 5.014245014245027),
-    #              (1402.3931623931621, 139.4871794871795), (1373.6752136752134, 917.2649572649572),
-    #              (516.4444444444445, 1108.4444444444446)],
-    #             np.int32
-    #         ),
-    #         "LOCKS_ROI": np.array(
-    #             [(512.278068529673, 16.720451293957353), (1292.6394786215064, 11.411870272924473),
-    #              (1199.739310753431, 799.7361518963072), (531.9259259259259, 852.8888888888889)],
-    #             np.int32
-    #         ),
-    #         "DOOR_CORNER_ROI": np.array(
-    #             [(562.8413531510314, 57.5085195001893), (667.1654728026784, 54.964028776978395),
-    #              (560.2968624278205, 89.73873532752741)],
-    #             np.int32
-    #         ),
-    #         "INTERACTION_ZONE": np.array(
-    #             [(45.388367729831145, 48.91557223264539), (2634.5925925925926, 30.962962962962962),
-    #              (2637.5684803001877, 1481.1707317073171), (40.34521575984991, 1460.9981238273922)],
-    #             np.int32
-    #         )
-    #     }
-    # }
-    # ,
-    # Stream 4 - Kokapet
+    
+    # Stream 7 - Kokapet
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.112.217:8001/Streaming/Channels/1501",
         "camera_id": "GF-12-CAM-15",
         "site_id": "12",
-        "site_name": "kokapet",
+        "site_name": "kokapet-store",
         "closed_door_reference": "close_doors/closed_GF-12-CAM-15.jpg",
         # PROVISIONAL 2026-06-10: measured evening closed-door SSIM = 0.62 (ref image
         # is bright mean~80, evening is dark mean~45 → reference lighting mismatch), yet
@@ -414,12 +414,12 @@ STREAMS_CONFIG = [
         }
     }
         ,
-        # Stream 5 - Khammam
+        # Stream 8 - Khammam
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.113.18:8001/Streaming/Channels/3101",
         "camera_id": "GF-30-CAM-31",
         "site_id": "30",
-        "site_name": "khammam",
+        "site_name": "khammam-store",
         "closed_door_reference": "close_doors/closed_GF-30-CAM-31.jpg",
         "ssim_threshold": 0.786,
         "debounce_threshold": 15,
@@ -439,7 +439,7 @@ STREAMS_CONFIG = [
         }
     }
     ,
-    # Stream 6 - Nizamabad
+    # Stream 9 - Nizamabad
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@43.249.216.149:8001/Streaming/Channels/1601",
         "camera_id": "GF-31-CAM-16",
@@ -467,7 +467,7 @@ STREAMS_CONFIG = [
     #Andhra Pradesh streams Below
 
     
-    # Stream 7
+    # Stream 10
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.76.17:8001/Streaming/Channels/2001",
         "camera_id": "GF-4-CAM-20",
@@ -496,7 +496,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(13, 11), (10, 1393), (2675, 157), (2679, 8)], np.int32)
         }
     },
-    # Stream 8
+    # Stream 11
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.103:8002/Streaming/Channels/2101",
         "camera_id": "FF-3-CAM-21",
@@ -529,7 +529,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(3, 18), (0, 1172), (2675, 541), (2679, 8)], np.int32)
         }
     },
-    # Stream 9 - Guntur
+    # Stream 12 - Guntur
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@49.205.164.154:8001/Streaming/Channels/1901",
         "camera_id": "GF-19-CAM-19",
@@ -552,7 +552,7 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([[1638, 646], [1419, 811], [1764, 1156], [1964, 947]], np.int32)
         }
     },
-    # Stream 10 - Kakinada
+    # Stream 13 - Kakinada
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.145.50:8001/Streaming/Channels/1501",
         "camera_id": "GF-22-CAM-15",
@@ -575,7 +575,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([[45, 39], [3791, 44], [3786, 2126], [45, 2111]], np.int32)
         }
     },
-    # Stream 11 - Rajahmundry
+    # Stream 14 - Rajahmundry
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.101:8001/Streaming/Channels/1501",
         "camera_id": "GF-14-CAM-15",
@@ -598,7 +598,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[1390, 13], [1904, 5], [1895, 789], [1423, 795]], np.int32)
         }
     },
-    # Stream 12 - Kurnool
+    # Stream 15 - Kurnool
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@103.206.112.148:8001/Streaming/Channels/1801",
         "camera_id": "GF-16-CAM-18",
@@ -621,7 +621,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[1946.656660412758, 23.6998123827392], [2002.1313320825516, 810.4315196998124], [1043.9324577861164, 603.6622889305817], [791.7748592870544, 0]], np.int32)
         }
     },
-    # Stream 13 - Ongole
+    # Stream 16 - Ongole
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.81.163:8001/Streaming/Channels/501",
         "camera_id": "GF-27-CAM-5",
@@ -644,7 +644,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[2157, 216], [2675, 446], [2294, 1438], [1828, 1153]], np.int32)
         }
     },
-    # Stream 14 - Srikakulam
+    # Stream 17 - Srikakulam
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.130.104:8001/Streaming/Channels/2701",
         "camera_id": "GF-20-CAM-27",
@@ -667,7 +667,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[301, 461], [1246, 30], [1648, 1474], [920, 1902]], np.int32)
         }
     },
-    # Stream 15 - Tirupathi
+    # Stream 18 - Tirupathi
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@202.83.31.24:8001/Streaming/Channels/2101",
         "camera_id": "GF-23-CAM-21",
@@ -690,7 +690,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[1591, 24], [2390, 26], [2230, 1153], [1591, 874]], np.int32)
         }
     },
-    # Stream 16 - Bhimavaram
+    # Stream 19 - Bhimavaram
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@175.101.94.133:8001/Streaming/Channels/3001",
         "camera_id": "GF-25-CAM-30",
@@ -713,7 +713,7 @@ STREAMS_CONFIG = [
             "DOOR_ROI": np.array([[1172.5119142773647, 1.5401540154015394], [1303.938390258296, 1144.481114778144], [2071.375133932663, 1031.8298496516313], [2050.253021721442, 3.887055372203885]], np.int32)
         }
     },
-    # Stream 17 - Vizianagaram
+    # Stream 20 - Vizianagaram
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.52.2:8001/Streaming/Channels/1301",
         "camera_id": "GF-29-CAM-13",
@@ -738,7 +738,7 @@ STREAMS_CONFIG = [
     },
     # Karnataka streams Below
 
-    # Stream 18 - Jayanagar
+    # Stream 21 - Jayanagar
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.37.109:8001/Streaming/Channels/2501",
         "camera_id": "GF-5-CAM-25",
@@ -762,7 +762,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([(0, 8), (0, 1340), (1902, 1416), (2076, 11)], np.int32)
         }
     },
-    # Stream 19 - UBCity Bangalore
+    # Stream 22 - UBCity Bangalore
         {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.89.106:8002/Streaming/Channels/401",
         "camera_id": "FF-34-CAM-4",
@@ -786,7 +786,7 @@ STREAMS_CONFIG = [
             "STANDING_ZONE": np.array([(1894.885533334695, 721.1249182472201), (2041.38651436805, 886.4617396991493), (1589.3263443222688, 978.5480706344011), (1468.4086445185906, 785.6387514924097)], np.int32)
         }
     },
-    # Stream 20 - Marthahalli
+    # Stream 23 - Marthahalli
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@106.51.66.143:8001/Streaming/Channels/1701",
         "camera_id": "GF-37-CAM-17",
@@ -812,7 +812,7 @@ STREAMS_CONFIG = [
     },
     # Tamil Nadu streams Below
 
-    # Stream 21 - Coimbatore
+    # Stream 24 - Coimbatore
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@183.82.251.16:8001/Streaming/Channels/2701",
         "camera_id": "GF-40-CAM-27",
@@ -840,7 +840,7 @@ STREAMS_CONFIG = [
             "INTERACTION_ZONE": np.array([[11, 19], [1899, 22], [1899, 1055], [20, 1060]], np.int32)
         }
     },
-    # Stream 22 - Chennai Annanagar
+    # Stream 25 - Chennai Annanagar
     {
         "rtsp_url": "rtsp://Bluecloud:User%401964@49.207.187.203:8001/Streaming/Channels/1501",
         "camera_id": "GF-41-CAM-15",
