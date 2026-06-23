@@ -267,7 +267,7 @@ class FrameQualityGate:
             return f"{prefix}_flat_white_block"
         if black_ratio >= 0.85:
             return f"{prefix}_large_black_block"
-        if sat_ratio >= 0.45 and sat_std >= 45.0:
+        if sat_ratio >= 0.85 and sat_std >= 45.0: # old 0.45
             return f"{prefix}_abnormal_chroma_artifacts"
         if prefix == "frame" and sat_ratio >= 0.75 and metrics.get("last_good_delta", 0.0) >= 50.0:
             return f"{prefix}_abnormal_chroma_artifacts"

@@ -196,11 +196,11 @@ STREAMS_CONFIG = [
         "site_id": "1",
         "site_name": "somajiguda",
         "closed_door_reference": "close_doors/closed_GF-1-CAM-40.jpg",
-        "ssim_threshold": 0.9,
+        "ssim_threshold": 0.85,
         "debounce_threshold": 15,
         "intensity_threshold": 6,
-        "motion_threshold": 3.0,
-        "door_corner_min_visible_ratio": 0.5,
+        "motion_threshold": 4.5,
+        "door_corner_min_visible_ratio": 0.8,
         "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
 
@@ -250,7 +250,7 @@ STREAMS_CONFIG = [
         "intensity_threshold": 6,
         "motion_threshold": 3.0,
         "door_corner_min_visible_ratio": 0.5,
-        "min_unlock_seconds": 5.0,
+        "min_unlock_seconds": 2.5,
         "max_unlock_seconds": 10.0,
 
         "evening_second_unlocker_timeout_seconds": 300.0,
